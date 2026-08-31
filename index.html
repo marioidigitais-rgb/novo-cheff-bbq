@@ -761,6 +761,7 @@ function renderOverlay(){
  if(overlay==='addCustomerAddress')return renderAddCustomerAddress();
  if(overlay==='addNeighborhoodQuick')return renderAddNeighborhoodQuick();
  if(overlay==='addonDialog')return renderAddonDialog();
+ if(overlay==='neighborhoodDialog')return renderNeighborhoodDialog();
  if(overlay==='supplierDialog')return renderSupplierDialog();
  if(overlay==='newRider')return renderNewRiderDialog();
  if(overlay==='materiaDialog')return renderMateriaDialog();
@@ -1789,6 +1790,22 @@ function renderAddonDialog(){
  ${isEdit?`<button class="danger" style="width:100%;margin-top:8px" id="deleteAddonDialog">🗑️ Excluir este adicional</button>`:''}
  </div></div>`;
 }
+function renderNeighborhoodDialog(){
+ const isEdit=!!window.editingNeighborhood;
+ const d=window.nbDialogDraft||{};
+ return `<div class="overlay show"><div class="panel" style="max-width:500px">
+ <div class="head"><h2>${isEdit?'Editar taxa de entrega':'Nova taxa de entrega'}</h2><button class="x" id="closeOverlay">×</button></div>
+ <div class="formgrid">
+  <div class="field"><label>Bairro</label><input id="dialogNbName" value="${esc(d.name||'')}" placeholder="Ex.: Centro"></div>
+  <div class="field"><label>Município</label><input id="dialogNbMunicipio" value="${esc(d.municipio||'')}" placeholder="Ex.: São Luís"></div>
+ </div>
+ <div class="field"><label>Valor da taxa</label><input id="dialogNbFee" type="number" step=".01" value="${d.fee!=null?d.fee:''}" placeholder="0,00"></div>
+ ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
+ <button class="primary" style="width:100%;margin-top:6px" id="saveNbDialog">${isEdit?'Salvar alterações':'Cadastrar taxa de entrega'}</button>
+ ${isEdit?`<button class="danger" style="width:100%;margin-top:8px" id="deleteNbDialog">🗑️ Excluir esta taxa de entrega</button>`:''}
+ <button class="ghost" id="closeOverlay" style="width:100%;margin-top:8px">Cancelar</button>
+ </div></div>`;
+}
 function renderSupplierDialog(){
  const isEdit=!!window.editingSupplier;
  const d=window.supplierDraft||{};
@@ -1984,7 +2001,7 @@ function renderCadastroPagamento(){
 }
 function renderCadastroTaxas(){
  const rows=sortedNeighborhoods();
- return `<h2>Cadastro · Taxas de entrega</h2><div class="cardbox"><h3>Nova taxa de entrega</h3><div class="formgrid"><div class="field"><label>Bairro</label><input id="nbName" placeholder="Ex.: Centro"></div><div class="field"><label>Município</label><input id="nbMunicipio" placeholder="Ex.: São Luís"></div></div><div class="field"><label>Valor da taxa</label><input id="nbFee" type="number" step=".01" placeholder="0,00"></div><button class="primary" id="addNb">Cadastrar taxa de entrega</button></div><div class="cardbox" style="padding:0;overflow:auto"><table class="table taxas-table"><thead><tr><th>Nome</th><th>Município</th><th>Valor</th><th>Ativo</th><th></th></tr></thead><tbody>${rows.length?rows.map(n=>`<tr><td>${esc(n.name)}</td><td>${esc(n.municipio||'—')}</td><td style="color:var(--ok);font-weight:700">${money(n.fee)}</td><td><button class="toggle-btn ${n.active!==false?'active':''}" data-togglenb="${n.id}" title="Ativar ou desativar esta taxa"></button></td><td style="text-align:right"><button class="icon-btn" data-deln="${n.id}" title="Excluir taxa">🗑️</button></td></tr>`).join(''):'<tr><td colspan="5" class="meta" style="text-align:center;padding:20px">Nenhuma taxa de entrega cadastrada.</td></tr>'}</tbody></table></div>`;
+ return `<h2>Cadastro · Taxas de entrega</h2><div class="cardbox"><h3>Nova taxa de entrega</h3><div class="formgrid"><div class="field"><label>Bairro</label><input id="nbName" placeholder="Ex.: Centro"></div><div class="field"><label>Município</label><input id="nbMunicipio" placeholder="Ex.: São Luís"></div></div><div class="field"><label>Valor da taxa</label><input id="nbFee" type="number" step=".01" placeholder="0,00"></div><button class="primary" id="addNb">Cadastrar taxa de entrega</button></div><p class="meta" style="margin:0 0 6px 2px">Toque em uma taxa cadastrada para editar os dados.</p><div class="cardbox" style="padding:0;overflow:auto"><table class="table taxas-table"><thead><tr><th>Nome</th><th>Município</th><th>Valor</th><th>Ativo</th><th></th></tr></thead><tbody>${rows.length?rows.map(n=>`<tr class="itemrow-clickable" data-clicknb="${n.id}" style="cursor:pointer"><td>${esc(n.name)}</td><td>${esc(n.municipio||'—')}</td><td style="color:var(--ok);font-weight:700">${money(n.fee)}</td><td><button class="toggle-btn ${n.active!==false?'active':''}" data-togglenb="${n.id}" title="Ativar ou desativar esta taxa"></button></td><td style="text-align:right"><button class="icon-btn" data-deln="${n.id}" title="Excluir taxa">🗑️</button></td></tr>`).join(''):'<tr><td colspan="5" class="meta" style="text-align:center;padding:20px">Nenhuma taxa de entrega cadastrada.</td></tr>'}</tbody></table></div>`;
 }
 function renderSettings(){
  const days=['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
@@ -2436,6 +2453,9 @@ document.getElementById('deleteAddonDialog')?.addEventListener('click',()=>{if(!
  document.querySelectorAll('[data-deladdr]').forEach(e=>e.onclick=()=>{const[cid,aid]=e.dataset.deladdr.split('|'),c=db.customers.find(x=>x.id===cid);if(!c)return;if(!confirm('Excluir este endereço?'))return;c.addresses=(c.addresses||[]).filter(a=>a.id!==aid);if(c.defaultAddressId===aid)c.defaultAddressId=c.addresses[0]?.id||'';syncCustomerLegacyAddress(c);save();render()});
  document.getElementById('addTable')?.addEventListener('click',()=>{let n=tableName.value.trim();if(n&&!db.tables.includes(n)){db.tables.push(n);save();render()}});document.querySelectorAll('[data-deltable]').forEach(e=>e.onclick=()=>{db.tables=db.tables.filter(x=>x!==e.dataset.deltable);save();render()});
  document.getElementById('addNb')?.addEventListener('click',()=>{let n=nbName.value.trim(),city=nbMunicipio.value.trim(),f=Number(nbFee.value);if(!n||!(f>=0))return;db.neighborhoods.push({id:id('n'),name:n,municipio:city,fee:f,active:true});save();render()});document.querySelectorAll('[data-deln]').forEach(e=>e.onclick=()=>{if(!confirm('Excluir esta taxa de entrega?'))return;db.neighborhoods=db.neighborhoods.filter(x=>x.id!==e.dataset.deln);save();render()});document.querySelectorAll('[data-togglenb]').forEach(e=>e.onclick=()=>{let n=db.neighborhoods.find(x=>x.id===e.dataset.togglenb);if(!n)return;n.active=n.active===false;save();render()});
+ document.querySelectorAll('[data-clicknb]').forEach(e=>e.onclick=(ev)=>{if(ev.target.closest('button'))return;let n=db.neighborhoods.find(x=>x.id===e.dataset.clicknb);if(!n)return;window.editingNeighborhood=n.id;window.nbDialogDraft={name:n.name,municipio:n.municipio||'',fee:n.fee};formErr='';overlay='neighborhoodDialog';render()});
+ document.getElementById('saveNbDialog')?.addEventListener('click',()=>{let n=document.getElementById('dialogNbName').value.trim(),city=document.getElementById('dialogNbMunicipio').value.trim(),f=Number(document.getElementById('dialogNbFee').value);if(!n||!(f>=0)){formErr='Informe nome e valor válidos.';render();return}if(window.editingNeighborhood){let nb=db.neighborhoods.find(x=>x.id===window.editingNeighborhood);if(!nb)return;nb.name=n;nb.municipio=city;nb.fee=f}else{db.neighborhoods.push({id:id('n'),name:n,municipio:city,fee:f,active:true})}window.editingNeighborhood=null;window.nbDialogDraft={};formErr='';overlay=null;save();render()});
+ document.getElementById('deleteNbDialog')?.addEventListener('click',()=>{if(!window.editingNeighborhood)return;if(!confirm('Excluir esta taxa de entrega?'))return;db.neighborhoods=db.neighborhoods.filter(x=>x.id!==window.editingNeighborhood);window.editingNeighborhood=null;window.nbDialogDraft={};overlay=null;save();render()});
  document.querySelectorAll('[data-togglepay]').forEach(e=>e.onclick=()=>{let p=db.payments.find(x=>x.id===e.dataset.togglepay);p.active=!p.active;save();render()});document.querySelectorAll('[data-feepay]').forEach(e=>e.onchange=()=>{db.payments.find(x=>x.id===e.dataset.feepay).fee=Math.max(0,Number(e.value));save()});
  document.getElementById('applyReports')?.addEventListener('click',()=>{window.reportFilter={...window.reportFilter,from:rfFrom.value,to:rfTo.value,payment:rfPay.value,status:rfStatus.value};render()});
  document.getElementById('applyDeliveryReport')?.addEventListener('click',()=>{window.reportFilter={...window.reportFilter,from:rfFromEntrega.value,to:rfToEntrega.value,rider:rfRider.value};render()});
