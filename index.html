@@ -1160,7 +1160,7 @@ function renderAddNeighborhoodQuick(){
  </div></div>`;
 }
 function renderMenu(){return `<div class="row" style="justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px"><h2 style="margin:0">Produtos e categorias</h2><button class="primary" id="openNewProduct" style="width:auto;padding:10px 18px">Novo +</button></div>
-<div class="cardbox"><h3>Importar produtos via planilha (Excel)</h3><p class="meta">Cadastre vários produtos de uma vez com um arquivo .xlsx ou .csv com as colunas Categoria, Nome, Preço, Estoque, Descrição, Exibir estoque (Sim/Não) e Tipo (PA ou PI, opcional — padrão PA se vazio). Categorias novas são criadas automaticamente. Produtos importados como PI não precisam de receita aqui: adicione a receita depois em Cadastro › Receitas.</p><div class="row" style="margin-top:9px;flex-wrap:wrap;gap:8px"><button type="button" class="btn" id="downloadImportTemplate">⬇️ Baixar modelo</button><input type="file" id="importProductsFile" accept=".xlsx,.xls,.csv" style="flex:1;min-width:180px;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:8px;color:var(--cream)"></div><button type="button" class="primary" id="importProductsBtn" style="margin-top:10px">📥 Importar planilha</button>${window.importMsg?`<p class="${window.importMsgType==='err'?'err':'ok'}" style="margin-top:8px">${esc(window.importMsg)}</p>`:''}</div>
+<div class="cardbox"><h3>Importar produtos via planilha (Excel)</h3><p class="meta">Cadastre vários produtos de uma vez com um arquivo .xlsx ou .csv com as colunas Categoria, Nome, Preço, Estoque, Descrição, Exibir estoque (Sim/Não) e Tipo (PA ou PI, opcional — padrão PA se vazio). Categorias novas são criadas automaticamente. Se já existir um produto com o mesmo nome na mesma categoria, os dados dele são atualizados (preço, estoque, descrição etc.) em vez de criar um produto duplicado. Produtos importados como PI não precisam de receita aqui: adicione a receita depois em Cadastro › Receitas.</p><div class="row" style="margin-top:9px;flex-wrap:wrap;gap:8px"><button type="button" class="btn" id="downloadImportTemplate">⬇️ Baixar modelo</button><input type="file" id="importProductsFile" accept=".xlsx,.xls,.csv" style="flex:1;min-width:180px;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:8px;color:var(--cream)"></div><button type="button" class="primary" id="importProductsBtn" style="margin-top:10px">📥 Importar planilha</button>${window.importMsg?`<p class="${window.importMsgType==='err'?'err':'ok'}" style="margin-top:8px">${esc(window.importMsg)}</p>`:''}</div>
 ${db.categories.map(c=>`<h3 style="margin:15px 0 8px;color:var(--mustard)">${esc(c.name)}</h3>${db.products.filter(p=>p.cat===c.id).map(p=>{const onPromo=Number(p.oldPrice)>Number(p.price);return `<div class="itemrow itemrow-clickable" data-editprod="${p.id}" style="cursor:pointer"><div class="row">${p.photo?`<img src="${p.photo}" style="width:36px;height:36px;object-fit:cover;border-radius:6px;margin-right:8px">`:''}<span class="tag" style="margin-right:6px">${productTypeLabel(p)}</span><b style="flex:1">${esc(p.name)}</b>${onPromo?`<span class="price-old">${money(p.oldPrice)}</span>`:''}<span class="price">${money(p.price)}</span></div><div class="meta">Custo médio ${money(productAvgCost(p.id))} · Estoque ${getProductStock(p)}${productHasRecipe(p)?' (calculado pela receita)':''} · ${p.showStock?'Exibe estoque ao cliente':'Oculta estoque do cliente'} · ${p.active?'Ativo':'Inativo'} · Adicionais: ${(p.addons||[]).map(o=>{const ad=db.addons.find(x=>x.id===o.id);return ad?`${esc(ad.name)} (até ${o.max})`:null}).filter(Boolean).join(', ')||'nenhum'}</div><div class="menu-item-actions"><button type="button" class="btn" data-dupprod="${p.id}">📋 Duplicar</button></div><div class="meta" style="opacity:.65;margin-top:4px">Toque para editar, excluir ou alterar adicionais ›</div></div>`}).join('')}`).join('')}`}
 function renderNewProductModal(){
  const hasCats=db.categories.length>0;
@@ -1222,6 +1222,8 @@ function findOrCreateCategoryByName(name){
  if(!c){c={id:id('cat'),name};db.categories.push(c)}
  return c;
 }
+function normalizeProductName(s){return String(s||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')}
+function findExistingProductByNameCat(name,catId){return db.products.find(p=>p.cat===catId&&normalizeProductName(p.name)===normalizeProductName(name))}
 function importProductsFromSheet(file){
  if(typeof XLSX==='undefined'){window.importMsg='Não foi possível carregar a biblioteca de planilhas. Verifique sua conexão com a internet.';window.importMsgType='err';render();return}
  const reader=new FileReader();
@@ -1230,7 +1232,7 @@ function importProductsFromSheet(file){
    const wb=XLSX.read(e.target.result,{type:'array'});
    const sheet=wb.Sheets[wb.SheetNames[0]];
    const rows=XLSX.utils.sheet_to_json(sheet,{defval:''});
-   let added=0,skipped=0;
+   let added=0,updated=0,skipped=0;
    rows.forEach(r=>{
     const keyMap=Object.keys(r).reduce((acc,k)=>{acc[k.trim().toLowerCase()]=r[k];return acc},{});
     const name=String(keyMap['nome']||keyMap['produto']||'').trim();
@@ -1244,12 +1246,18 @@ function importProductsFromSheet(file){
     const type=['pi','produto intermediário','produto intermediario'].includes(typeRaw)?'pi':'pa';
     if(!name||!(price>0)||!catName){skipped++;return}
     const cat=findOrCreateCategoryByName(catName);
-    db.products.push({id:id('p'),cat:cat.id,name,desc,price,stock,type,active:true,showStock,addons:[]});
-    added++;
+    const existing=findExistingProductByNameCat(name,cat.id);
+    if(existing){
+     existing.name=name;existing.desc=desc;existing.price=price;existing.stock=stock;existing.type=type;existing.showStock=showStock;
+     updated++;
+    }else{
+     db.products.push({id:id('p'),cat:cat.id,name,desc,price,stock,type,active:true,showStock,addons:[]});
+     added++;
+    }
    });
    save();
-   window.importMsg=`${added} produto(s) importado(s) com sucesso.${skipped?` ${skipped} linha(s) ignorada(s) por falta de nome, categoria ou preço válido.`:''}`;
-   window.importMsgType=(skipped&&!added)?'err':'ok';
+   window.importMsg=`${added} produto(s) novo(s) importado(s).${updated?` ${updated} produto(s) já cadastrado(s) (mesmo nome e categoria) foram atualizados em vez de duplicados.`:''}${skipped?` ${skipped} linha(s) ignorada(s) por falta de nome, categoria ou preço válido.`:''}`;
+   window.importMsgType=(skipped&&!added&&!updated)?'err':'ok';
    render();
   }catch(err){
    window.importMsg='Não foi possível ler a planilha. Verifique o arquivo e tente novamente.';
