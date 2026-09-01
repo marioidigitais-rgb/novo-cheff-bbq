@@ -222,7 +222,7 @@ async function loadMenuFromSupabase(){
  try{
   const [catsR,prodR,paR,addonsR,nbR,payR,hoursR,tablesR,setR]=await Promise.all([
    sb.from('categories').select('id,name,sort_order').order('sort_order'),
-   sb.from('products').select('id,category_id,name,description,price,old_price,stock,active,show_stock,type'),
+   sb.from('products').select('id,category_id,name,description,price,old_price,stock,active,show_stock,type,photo'),
    sb.from('product_addons').select('product_id,addon_id,max_qty'),
    sb.from('addons').select('id,name,price,stock,active,min_qty,max_qty'),
    sb.from('neighborhoods').select('id,name,fee,municipio,active'),
@@ -237,7 +237,7 @@ async function loadMenuFromSupabase(){
   db.categories=(catsR.data||[]).map(c=>({id:c.id,name:c.name}));
   const paMap={};
   (paR.data||[]).forEach(x=>{(paMap[x.product_id]=paMap[x.product_id]||[]).push({id:x.addon_id,max:x.max_qty})});
-  db.products=(prodR.data||[]).map(p=>({id:p.id,cat:p.category_id,name:p.name,desc:p.description||'',price:Number(p.price),oldPrice:Number(p.old_price)||0,stock:Number(p.stock),active:p.active,showStock:p.show_stock,type:p.type==='pi'?'pi':'pa',addons:paMap[p.id]||[],recipe:[]}));
+  db.products=(prodR.data||[]).map(p=>({id:p.id,cat:p.category_id,name:p.name,desc:p.description||'',price:Number(p.price),oldPrice:Number(p.old_price)||0,stock:Number(p.stock),active:p.active,showStock:p.show_stock,type:p.type==='pi'?'pi':'pa',addons:paMap[p.id]||[],recipe:[],photo:p.photo||null}));
   db.addons=(addonsR.data||[]).map(a=>({id:a.id,name:a.name,price:Number(a.price),stock:Number(a.stock),active:a.active,min:a.min_qty,max:a.max_qty}));
   db.neighborhoods=(nbR.data||[]).map(n=>({id:n.id,name:n.name,fee:Number(n.fee),municipio:n.municipio||'',active:n.active!==false}));
   db.payments=(payR.data||[]).map(p=>({id:p.id,name:p.name,fee:Number(p.fee),active:p.active,showClient:p.show_client}));
@@ -360,7 +360,7 @@ async function syncAddonsToSupabase(){
 }
 async function syncProductsToSupabase(){
  if(__snapEquals('products',db.products))return;
- const rows=db.products.map(p=>({id:p.id,category_id:p.cat,name:p.name,description:p.desc,price:p.price,old_price:p.oldPrice,stock:p.stock,active:p.active,show_stock:p.showStock,type:p.type}));
+ const rows=db.products.map(p=>({id:p.id,category_id:p.cat,name:p.name,description:p.desc,price:p.price,old_price:p.oldPrice,stock:p.stock,active:p.active,show_stock:p.showStock,type:p.type,photo:p.photo||null}));
  await __upsertAndPrune('products',rows);
  // a relação produto × adicional é sempre derivada do que está nos
  // produtos agora, então é mais simples apagar tudo e recriar do zero.
