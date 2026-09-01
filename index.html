@@ -464,6 +464,8 @@ function startSupabaseRealtime(){
 }
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=n=>'R$ '+Number(n||0).toFixed(2).replace('.',',');
+function safeDate(v){const d=new Date(v);return isNaN(d.getTime())?null:d}
+function isoDay(v){const d=safeDate(v);return d?d.toISOString().slice(0,10):''}
 const id=p=>p+Date.now()+Math.random().toString(36).slice(2,5);
 function genOrderId(prefix){return prefix+Date.now().toString(36).slice(-4).toUpperCase()+Math.floor(100+Math.random()*900)}
 function normStr(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()}
@@ -1274,7 +1276,7 @@ function orderDeliveryLabel(o){return o.customer.delivery==='entrega'?'Delivery'
 function orderPaymentLabel(o){return o.customer.payments?.length?o.customer.payments.map(p=>db.payments.find(x=>x.id===p.payment)?.name||p.payment||'Não informado').join(' + '):(db.payments.find(p=>p.id===o.customer.payment)?.name||o.customer.payment||'Não informado')}
 function orderCustomerLabel(o){if(!o.customer.name||o.customer.name==='Cliente balcão')return '—';const cust=o.customer.phone?db.customers.find(c=>c.phone===o.customer.phone):null;return cust&&cust.codeNum?cust.codeNum+' - '+o.customer.name:o.customer.name}
 function orderOriginLabel(o){return o.source==='pdv'?'PDV':'Cardápio Digital'}
-function vendasDiaAllToday(){const today=new Date().toISOString().slice(0,10);return db.orders.filter(o=>new Date(o.createdAt).toISOString().slice(0,10)===today).slice().reverse()}
+function vendasDiaAllToday(){const today=new Date().toISOString().slice(0,10);return db.orders.filter(o=>isoDay(o.createdAt)===today).slice().reverse()}
 function vendasDiaFiltered(){
  const all=vendasDiaAllToday();
  const term=(window.vendasDiaSearch||'').trim().toLowerCase();
@@ -1335,7 +1337,7 @@ function renderVendasDoDiaPanel(){
 }
 function renderItensVendidosPanel(){
  const os=db.orders||[], today=new Date().toISOString().slice(0,10); const f=window.reportFilter||{from:today,to:today};
- const inRange=o=>{let d=new Date(o.createdAt).toISOString().slice(0,10);return (!f.from||d>=f.from)&&(!f.to||d<=f.to)&&o.status==='concluido'};
+ const inRange=o=>{let d=isoDay(o.createdAt);return (!f.from||d>=f.from)&&(!f.to||d<=f.to)&&o.status==='concluido'};
  const completed=os.filter(inRange);
  const prod={},adds={};completed.forEach(o=>o.items.forEach(x=>{prod[x.productId]=(prod[x.productId]||0)+x.qty;(x.addons||[]).forEach(a=>adds[a.id]=(adds[a.id]||0)+a.qty*x.qty)}));
  return `<div class="report-panel report-itens-vendidos" style="display:${window.reportView==='itens_vendidos'?'block':'none'}">
@@ -1346,7 +1348,7 @@ function renderItensVendidosPanel(){
 function renderReports(){
  window.reportView=window.reportView||'vendas';
  const os=db.orders||[], today=new Date().toISOString().slice(0,10); window.reportFilter=window.reportFilter||{from:today,to:today,payment:'',status:'',rider:''}; const f=window.reportFilter;
- const inRange=o=>{let d=new Date(o.createdAt).toISOString().slice(0,10);return (!f.from||d>=f.from)&&(!f.to||d<=f.to)&&(!f.status||o.status===f.status)&&(!f.payment||((o.customer.payments||[]).some(x=>x.payment===f.payment)||o.customer.payment===f.payment))};
+ const inRange=o=>{let d=isoDay(o.createdAt);return (!f.from||d>=f.from)&&(!f.to||d<=f.to)&&(!f.status||o.status===f.status)&&(!f.payment||((o.customer.payments||[]).some(x=>x.payment===f.payment)||o.customer.payment===f.payment))};
  const filtered=os.filter(inRange), completed=filtered.filter(o=>o.status==='concluido'), sales=completed.reduce((s,o)=>s+Number(o.total||0),0);
  const deliveryRider=f.rider||'';
  const deliveryOrders=filtered.filter(o=>o.customer.delivery==='entrega'&&o.status==='concluido'&&(!deliveryRider||o.riderId===deliveryRider));
