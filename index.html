@@ -631,7 +631,7 @@ setInterval(checkNewOrders,4000);
 window.addEventListener('storage',e=>{if(e.key===KEY)checkNewOrders()});
 function save(){localStorage.setItem(KEY,JSON.stringify(db));window.lastSeenOrderCount=db.orders.length;scheduleSupabaseSync()}
 async function load(){try{db=JSON.parse(localStorage.getItem(KEY))||structuredClone(DEFAULT)}catch(e){db=structuredClone(DEFAULT)}normalize();window.lastSeenOrderCount=db.orders.length;window.menuLoading=(route==='client');render();await loadMenuFromSupabase();normalize();if(window.supabaseMenuLoaded)__seedSyncSnapshot();window.menuLoading=false;render();startSupabaseRealtime()}
-function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.categories??=structuredClone(DEFAULT.categories);db.products??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.orders??=[];db.ingredients??=[];db.cash??={open:false,initial:0,movements:[]};db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.type=p.type==='pi'?'pi':'pa';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true});db.payments.forEach(p=>p.showClient??=true);
+function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.categories??=structuredClone(DEFAULT.categories);db.products??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.riders.forEach(r=>{r.active=r.active!==false;r.createdAt=r.createdAt||new Date().toISOString()});db.orders??=[];db.ingredients??=[];db.cash??={open:false,initial:0,movements:[]};db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.type=p.type==='pi'?'pi':'pa';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true});db.payments.forEach(p=>p.showClient??=true);
  db.customerSeq??=0;
  db.customers.forEach(c=>{
   c.addresses??=[];
@@ -1055,7 +1055,7 @@ function renderDispatchDelivery(){
  const d=window.dispatchDraft||(window.dispatchDraft={riderId:o.riderId||'',sendWa:true});
  return `<div class="overlay show"><div class="panel">
  <div class="head"><h2>Saiu para entrega · ${o.id}</h2><button class="x" id="closeOverlay">×</button></div>
- <div class="field"><label>Entregador</label><select id="dispatchRider"><option value="">Selecione o entregador</option>${db.riders.map(r=>`<option value="${r.id}" ${d.riderId===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}</select></div>
+ <div class="field"><label>Entregador</label><select id="dispatchRider"><option value="">Selecione o entregador</option>${db.riders.filter(r=>r.active!==false||r.id===d.riderId).map(r=>`<option value="${r.id}" ${d.riderId===r.id?'selected':''}>${esc(r.name)}${r.active===false?' (inativo)':''}</option>`).join('')}</select></div>
  <label class="chip" style="display:flex;align-items:center;gap:8px;margin-top:8px"><input type="checkbox" id="dispatchSendWa" ${d.sendWa?'checked':''}> Enviar mensagem para o entregador via WhatsApp</label>
  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  <button class="primary" id="confirmDispatch">Confirmar saída para entrega</button>
@@ -1681,7 +1681,7 @@ function moveProductOrder(pid,dir){
  const iA=sameCat[pos].i,iB=sameCat[swapPos].i;
  [db.products[iA],db.products[iB]]=[db.products[iB],db.products[iA]];save();
 }
-function renderDeliveries(){return `<h2>Entregas</h2>${db.orders.filter(o=>o.customer.delivery==='entrega'&&!['concluido','cancelado'].includes(o.status)).map(o=>`<div class="order"><b>${o.id}</b> · ${esc(o.customer.neighborhoodName)} · ${esc(o.customer.address)}, ${esc(o.customer.number)}<div class="meta">${esc(o.customer.name)}</div><select data-riderorder="${o.id}" style="margin-top:8px;width:100%;padding:8px;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:6px"><option value="">Selecionar entregador</option>${db.riders.map(r=>`<option value="${r.id}" ${o.riderId===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}</select></div>`).join('')||'<div class="empty-state">Nenhuma entrega pendente.</div>'}`}
+function renderDeliveries(){return `<h2>Entregas</h2>${db.orders.filter(o=>o.customer.delivery==='entrega'&&!['concluido','cancelado'].includes(o.status)).map(o=>`<div class="order"><b>${o.id}</b> · ${esc(o.customer.neighborhoodName)} · ${esc(o.customer.address)}, ${esc(o.customer.number)}<div class="meta">${esc(o.customer.name)}</div><select data-riderorder="${o.id}" style="margin-top:8px;width:100%;padding:8px;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:6px"><option value="">Selecionar entregador</option>${db.riders.filter(r=>r.active!==false||r.id===o.riderId).map(r=>`<option value="${r.id}" ${o.riderId===r.id?'selected':''}>${esc(r.name)}${r.active===false?' (inativo)':''}</option>`).join('')}</select></div>`).join('')||'<div class="empty-state">Nenhuma entrega pendente.</div>'}`}
 function cashMethodName(mid){if(mid==='especie'||mid==='cash')return 'Espécie (Dinheiro)';if(mid==='pix')return 'Pix';return db.payments.find(p=>p.id===mid)?.name||(mid?mid:'—')}
 function fmtDT(iso){if(!iso)return '—';try{const d=new Date(iso);if(isNaN(d))return '—';return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}catch(e){return '—'}}
 function renderCash(){
@@ -1759,7 +1759,45 @@ function renderCadastroFornecedores(){
  </div>`;
 }
 function renderCadastroEntregadores(){
- return `<h2>Cadastro · Entregadores</h2><div class="cardbox"><button class="primary" id="newRiderBtn" style="width:100%;margin-bottom:14px">➕ Cadastrar novo entregador</button><h3>Entregadores cadastrados</h3>${db.riders.map(r=>`<div class="itemrow">${esc(r.name)} · ${esc(fmtPhoneDisplay(r.phone))} ${r.plate?'· '+esc(r.plate):''} <button class="btn" data-delrider="${r.id}">Excluir</button></div>`).join('')||'<span class="meta">Nenhum entregador cadastrado.</span>'}</div>`;
+ window.riderSearch=window.riderSearch||'';
+ window.riderSort=window.riderSort||{dir:'asc'};
+ return `<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:14px">
+ <h2 style="margin:0">Entregadores</h2>
+ <div style="display:flex;gap:8px;flex:1;min-width:230px;max-width:560px">
+  <input autocomplete="off" id="riderSearch" type="search" placeholder="🔍 Pesquise por nome, WhatsApp ou placa" value="${esc(window.riderSearch)}" style="flex:1;background:var(--e);border:1px solid var(--line);border-radius:7px;padding:9px 11px;color:var(--cream)">
+  <button class="primary" id="newRiderBtn" style="width:auto;white-space:nowrap;margin-top:0;padding:9px 16px">➕ Novo</button>
+ </div>
+ </div>
+ <div class="cardbox" style="padding:0;overflow:auto">
+ <table class="table riders-table">
+  <thead><tr>
+   <th id="riderSortId" style="cursor:pointer;white-space:nowrap;user-select:none">ID ${window.riderSort.dir==='asc'?'▲':'▼'}</th>
+   <th>Nome</th>
+   <th>WhatsApp</th>
+   <th>Placa</th>
+   <th>Cadastrado em</th>
+   <th>Ativo</th>
+   <th></th>
+  </tr></thead>
+  <tbody id="ridersTbody">${renderRidersRows()}</tbody>
+ </table>
+ </div>`;
+}
+function renderRidersRows(){
+ const q=(window.riderSearch||'').trim().toLowerCase();
+ let list=db.riders.map((r,i)=>({...r,_no:i+1}));
+ if(q)list=list.filter(r=>[r.name,r.phone,r.plate].some(v=>String(v||'').toLowerCase().includes(q)));
+ list.sort((a,b)=>window.riderSort.dir==='asc'?a._no-b._no:b._no-a._no);
+ if(!list.length)return `<tr><td colspan="7" class="meta" style="text-align:center;padding:20px">Nenhum entregador encontrado.</td></tr>`;
+ return list.map(r=>`<tr class="itemrow-clickable" data-clickrider="${r.id}" style="cursor:pointer">
+  <td>${r._no}</td>
+  <td>${esc(r.name)}</td>
+  <td>${validPhone(r.phone)?`<a class="linkwa" href="${wa(r.phone,'Olá '+r.name)}" target="_blank" onclick="event.stopPropagation()">💬 ${esc(fmtPhoneDisplay(r.phone))}</a>`:'<span class="meta">—</span>'}</td>
+  <td>${r.plate?esc(r.plate):'<span class="meta">—</span>'}</td>
+  <td class="meta">${r.createdAt?new Date(r.createdAt).toLocaleDateString('pt-BR'):'—'}</td>
+  <td><button type="button" class="toggle-btn ${r.active!==false?'active':''}" data-toggleriderstatus="${r.id}" onclick="event.stopPropagation()" aria-label="Ativar ou desativar entregador"></button></td>
+  <td><button type="button" class="icon-btn" data-delrider="${r.id}" onclick="event.stopPropagation()" title="Excluir">🗑️</button></td>
+ </tr>`).join('');
 }
 function renderCadastroAdicionais(){
  return `<h2>Cadastro · Adicionais</h2>
@@ -1953,14 +1991,19 @@ function renderCadastroReceitas(){
  }
 }
 function renderNewRiderDialog(){
+ const isEdit=!!window.editingRider;
  const d=window.riderDraft||{};
+ const active=d.active!==false;
  return `<div class="overlay show"><div class="panel" style="max-width:500px">
- <div class="head"><h2>Cadastrar novo entregador</h2><button class="x" id="closeOverlay">×</button></div>
+ <div class="head"><h2>${isEdit?'Editar entregador':'Cadastrar novo entregador'}</h2><button class="x" id="closeOverlay">×</button></div>
  <div class="field"><label>Nome completo</label><input autocomplete="off" id="rName" value="${esc(d.name||'')}" placeholder="Nome do entregador"></div>
  <div class="field"><label>Telefone</label><input autocomplete="off" id="rPhone" inputmode="numeric" maxlength="15" value="${esc(maskPhoneBR(d.phone||''))}" placeholder="(00) 99999-9999"></div>
  <div class="field"><label>Placa da moto (opcional)</label><input autocomplete="off" id="rPlate" class="plate-input" value="${esc(d.plate||'')}" placeholder="AAA0000 ou AAA0A00" maxlength="8"><div class="plate-display" id="plateInfo" style="margin-top:4px;font-size:11px;color:var(--dim)"></div></div>
+ <div class="field"><label>Status</label><div class="row" style="justify-content:flex-start;gap:10px"><button type="button" class="toggle-btn ${active?'active':''}" id="rActiveToggle"></button><span class="toggle-status ${active?'active':''}" id="rActiveLabel">${active?'Ativo':'Inativo'}</span></div></div>
+ ${isEdit&&d.createdAtDisplay?`<div class="meta" style="margin-bottom:4px">Cadastrado em ${esc(d.createdAtDisplay)}</div>`:''}
  ${formErr?'<div class="err">'+esc(formErr)+'</div>':''}
- <button class="primary" id="addRider" style="width:100%;margin-top:14px">Cadastrar entregador</button>
+ <button class="primary" id="addRider" style="width:100%;margin-top:14px">${isEdit?'Salvar alterações':'Cadastrar entregador'}</button>
+ ${isEdit?`<button class="danger" style="width:100%;margin-top:8px" id="deleteRiderDialog">🗑️ Excluir este entregador</button>`:''}
  <button class="ghost" id="closeOverlay" style="width:100%">Cancelar</button>
  </div></div>`;
 }
@@ -2394,12 +2437,18 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  document.querySelectorAll('[data-dupprod]').forEach(e=>e.onclick=(ev)=>{ev.stopPropagation();let p=db.products.find(x=>x.id===e.dataset.dupprod);if(!p)return;let copy={...p,id:id('p'),name:p.name+' (cópia)',addons:(p.addons||[]).map(o=>({...o})),recipe:(p.recipe||[]).map(r=>({...r}))};let origIdx=db.products.findIndex(x=>x.id===p.id);db.products.splice(origIdx+1,0,copy);window.editingProduct=copy.id;formErr='';overlay='editProduct';save();render()});
  document.getElementById('downloadImportTemplate')?.addEventListener('click',downloadProductTemplate);
  document.getElementById('importProductsBtn')?.addEventListener('click',()=>{const f=document.getElementById('importProductsFile')?.files?.[0];if(!f){window.importMsg='Selecione um arquivo de planilha antes de importar.';window.importMsgType='err';render();return}importProductsFromSheet(f)});
- document.getElementById('newRiderBtn')?.addEventListener('click',()=>{window.riderDraft={};overlay='newRider';render();setTimeout(()=>rName?.focus(),50)});
- document.getElementById('closeOverlay')?.addEventListener('click',()=>{overlay=null;window.riderDraft=null;formErr='';render()});
+ document.getElementById('newRiderBtn')?.addEventListener('click',()=>{window.editingRider=null;window.riderDraft={active:true};formErr='';overlay='newRider';render();setTimeout(()=>rName?.focus(),50)});
+ document.getElementById('closeOverlay')?.addEventListener('click',()=>{overlay=null;window.riderDraft=null;window.editingRider=null;formErr='';render()});
  document.getElementById('rPlate')?.addEventListener('input',(e)=>{let input=e.target;let original=input.value;let formatted=formatPlate(original);input.value=formatted;let type=platePlateType(formatted);let plateInfo=document.getElementById('plateInfo');if(formatted){plateInfo.textContent='✓ '+type;plateInfo.style.color='#3d8b50'}else{plateInfo.textContent=formatted?'':'Formato: AAA0000 ou AAA0A00';plateInfo.style.color='var(--dim)'}});
  document.getElementById('rPhone')?.addEventListener('input',(e)=>{e.target.value=maskPhoneBR(e.target.value)});
- document.getElementById('addRider')?.addEventListener('click',()=>{let n=rName.value.trim(),p=rPhone.value.trim(),plate=rPlate.value.trim();if(!n||!validPhone(p)){formErr='Informe nome e WhatsApp válido do entregador.';render();return}if(plate&&!validPlate(plate)){formErr='Placa inválida.';render();return}db.riders.push({id:id('r'),name:n,phone:fmtPhone(p),plate:plate||null});overlay=null;window.riderDraft=null;formErr='';save();render()});
- document.querySelectorAll('[data-delrider]').forEach(e=>e.onclick=()=>{db.riders=db.riders.filter(x=>x.id!==e.dataset.delrider);save();render()});document.querySelectorAll('[data-riderorder]').forEach(e=>e.onchange=()=>{let o=db.orders.find(x=>x.id===e.dataset.riderorder);o.riderId=e.value;save();render()});
+ document.getElementById('rActiveToggle')?.addEventListener('click',()=>{window.riderDraft=window.riderDraft||{};window.riderDraft.active=!(window.riderDraft.active!==false);render()});
+ document.getElementById('addRider')?.addEventListener('click',()=>{let n=rName.value.trim(),p=rPhone.value.trim(),plate=rPlate.value.trim();if(!n||!validPhone(p)){formErr='Informe nome e WhatsApp válido do entregador.';render();return}if(plate&&!validPlate(plate)){formErr='Placa inválida.';render();return}const active=(window.riderDraft&&window.riderDraft.active!==false);if(window.editingRider){let r=db.riders.find(x=>x.id===window.editingRider);if(r){r.name=n;r.phone=fmtPhone(p);r.plate=plate||null;r.active=active}}else{db.riders.push({id:id('r'),name:n,phone:fmtPhone(p),plate:plate||null,active:true,createdAt:new Date().toISOString()})}overlay=null;window.riderDraft=null;window.editingRider=null;formErr='';save();render()});
+ document.getElementById('deleteRiderDialog')?.addEventListener('click',()=>{if(!window.editingRider)return;if(!confirm('Excluir este entregador?'))return;db.riders=db.riders.filter(x=>x.id!==window.editingRider);overlay=null;window.riderDraft=null;window.editingRider=null;formErr='';save();render()});
+ document.getElementById('riderSearch')?.addEventListener('input',e=>{window.riderSearch=e.target.value;render()});
+ document.getElementById('riderSortId')?.addEventListener('click',()=>{window.riderSort=window.riderSort||{dir:'asc'};window.riderSort.dir=window.riderSort.dir==='asc'?'desc':'asc';render()});
+ document.querySelectorAll('[data-toggleriderstatus]').forEach(e=>e.addEventListener('click',ev=>{ev.stopPropagation();let r=db.riders.find(x=>x.id===e.dataset.toggleriderstatus);if(r){r.active=!(r.active!==false);save();render()}}));
+ document.querySelectorAll('[data-clickrider]').forEach(e=>e.addEventListener('click',()=>{const r=db.riders.find(x=>x.id===e.dataset.clickrider);if(!r)return;window.editingRider=r.id;window.riderDraft={name:r.name,phone:r.phone,plate:r.plate||'',active:r.active!==false,createdAtDisplay:r.createdAt?(new Date(r.createdAt).toLocaleDateString('pt-BR')+' '+new Date(r.createdAt).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})):''};formErr='';overlay='newRider';render();setTimeout(()=>document.getElementById('rName')?.focus(),50)}));
+ document.querySelectorAll('[data-delrider]').forEach(e=>e.onclick=ev=>{ev.stopPropagation();if(!confirm('Excluir este entregador?'))return;db.riders=db.riders.filter(x=>x.id!==e.dataset.delrider);save();render()});document.querySelectorAll('[data-riderorder]').forEach(e=>e.onchange=()=>{let o=db.orders.find(x=>x.id===e.dataset.riderorder);o.riderId=e.value;save();render()});
  document.getElementById('savePdv')?.addEventListener('click',()=>{let d=pdvDraft(),calc=recalcPdv(),selected=db.customers.find(c=>c.id===d.customerId);if(!d.items.length)return alert('Adicione pelo menos um produto.');if(d.mode==='local'&&!d.table)return alert('Selecione a mesa.');if(d.mode==='entrega'&&(!d.address||!d.number||!d.neighborhood))return alert('Complete o endereço de entrega.');if(calc.sum+0.009<calc.total)return alert('Informe os valores das formas de pagamento até completar o total.');for(const x of d.items){let p=db.products.find(p=>p.id===x.productId);if(!p||getProductStock(p)<x.qty)return alert('Estoque insuficiente para '+x.name);for(const a of x.addons||[]){let ad=db.addons.find(a2=>a2.id===a.id);if(!ad||ad.stock<a.qty*x.qty)return alert('Estoque insuficiente para '+a.name)}}const pdvOrderId=genOrderId('PDV-');d.items.forEach(x=>{consumeProductStock(db.products.find(p=>p.id===x.productId),x.qty,{orderId:pdvOrderId});(x.addons||[]).forEach(a=>db.addons.find(ad=>ad.id===a.id).stock-=a.qty*x.qty)});let pays=(d.payments||[]).filter(x=>Number(x.amount||0)>0).map(x=>({payment:x.payment,amount:Number(x.amount)}));let o={id:pdvOrderId,createdAt:new Date().toISOString(),source:'pdv',customer:{name:selected?.name||d.customerSearch||'Cliente balcão',phone:selected?.phone||'',delivery:d.mode==='local'?'local':d.mode==='entrega'?'entrega':'retirada',table:d.table||'',address:d.address||'',number:d.number||'',complement:d.complement||'',neighborhood:d.neighborhood||'',neighborhoodName:db.neighborhoods.find(n=>n.id===d.neighborhood)?.name||'',deliveryFee:calc.fee,payment:pays.map(x=>x.payment).join('+'),payments:pays,notes:d.notes||''},items:d.items,subtotal:calc.gross,total:calc.total,surcharge:Number(d.surcharge||0),discount:Number(d.discount||0),tendered:Number(d.tendered||0),status:d.mode==='entrega'?'recebido':d.mode==='local'?'aguardando_retirada':'aguardando_retirada',paid:false};db.orders.push(o);if(db.cash.open){db.cash.movements=db.cash.movements||[];pays.forEach(x=>{let pm=db.payments.find(p=>p.id===x.payment);if(pm&&(pm.id==='pix'||pm.id==='cash'))db.cash.movements.push({id:id('mov'),date:new Date().toISOString(),kind:'entrada',source:'pedido',method:pm.id,value:x.amount,note:'',orderId:o.id})})}save();saveOrderToSupabase(o).catch(e=>console.error('Pedido do balcão salvo normalmente, mas houve falha ao enviar para o Supabase (será reenviado):',e));window.lastOrderId=o.id;window.pdvDraftData={customerId:'',customerSearch:'',mode:'retirada',table:'',address:'',number:'',complement:'',neighborhood:'',items:[],surcharge:0,discount:0,tendered:'',notes:'',payments:[{payment:'',amount:0}]};overlay='pdvSaved';render();printOrder(o.id)});
  document.getElementById('openCash')?.addEventListener('click',()=>{const v=Number(cashInitial.value||0);db.cash.movements=db.cash.movements||[];db.cash.open=true;db.cash.initial=v;db.cash.openedAt=new Date().toISOString();db.cash.closedAt=null;save();render()});
  document.getElementById('closeCash')?.addEventListener('click',()=>{if(!confirm('Fechar o caixa agora?'))return;db.cash.open=false;db.cash.closedAt=new Date().toISOString();save();render()});
