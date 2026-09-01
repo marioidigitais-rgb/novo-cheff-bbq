@@ -1278,6 +1278,7 @@ function orderCustomerLabel(o){if(!o.customer.name||o.customer.name==='Cliente b
 function orderOriginLabel(o){return o.source==='pdv'?'PDV':'Cardápio Digital'}
 function vendasDiaAllToday(){const today=new Date().toISOString().slice(0,10);return db.orders.filter(o=>isoDay(o.createdAt)===today).slice().reverse()}
 function vendasDiaFiltered(){
+ window.vendasDiaSearch=window.vendasDiaSearch||'';
  const all=vendasDiaAllToday();
  const term=(window.vendasDiaSearch||'').trim().toLowerCase();
  const f=window.vendasDiaFilters||{status:'',payment:''};
