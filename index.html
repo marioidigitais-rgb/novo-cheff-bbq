@@ -2632,7 +2632,17 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
   formErr='';save();render();
  });
  document.getElementById('toggleStockLock')?.addEventListener('click',()=>{window.stockUnlocked=!window.stockUnlocked;render()});
- document.querySelectorAll('[data-stockcat]').forEach(e=>e.addEventListener('toggle',()=>{window.stockCatOpen=window.stockCatOpen||{};if(e.open){window.stockCatOpen={};window.stockCatOpen[e.dataset.stockcat]=true;if(!window.stockSearch)render()}else{window.stockCatOpen[e.dataset.stockcat]=false}}));
+ document.querySelectorAll('[data-stockcat]').forEach(e=>e.addEventListener('toggle',()=>{window.stockCatOpen=window.stockCatOpen||{};window.stockCatOpen[e.dataset.stockcat]=e.open}));
+ document.querySelectorAll('.stock-cat > summary').forEach(sum=>sum.addEventListener('click',ev=>{
+  if(window.stockSearch)return;
+  ev.preventDefault();
+  const cid=sum.parentElement?.dataset.stockcat;if(!cid)return;
+  window.stockCatOpen=window.stockCatOpen||{};
+  const wasOpen=!!window.stockCatOpen[cid];
+  window.stockCatOpen={};
+  if(!wasOpen)window.stockCatOpen[cid]=true;
+  render();
+ }));
  document.querySelectorAll('[data-editstock]').forEach(e=>e.addEventListener('change',()=>{let [type,pid]=e.dataset.editstock.split('|'),o=(type==='product'?db.products:db.addons).find(x=>x.id===pid);if(o){o.stock=Math.max(0,Number(e.value||0));save()}}));
  document.getElementById('toggleCatalogOrder')?.addEventListener('click',()=>{window.catalogOrderUnlocked=!window.catalogOrderUnlocked;render()});
  document.getElementById('stockSearchInput')?.addEventListener('input',e=>{window.stockSearch=e.target.value;render()});
