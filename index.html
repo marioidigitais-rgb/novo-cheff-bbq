@@ -871,10 +871,10 @@ function renderOverlay(){
  if(overlay==='cashMove')return renderCashMoveDialog();
  if(overlay==='cashToggle')return renderCashToggleDialog();
  if(overlay==='addons'){const ctxT=(window.addingCtx||{}).type;const title=ctxT==='addAddon'?'Adicionar adicional ao item':'Monte seu item';return `<div class="overlay show"><div class="panel"><div class="head"><h2>${title}</h2><button class="x" id="closeOverlay">×</button></div>${renderAddonChooser()}</div></div>`}
- if(overlay==='cart'){return `<div class="overlay show"><div class="panel"><div class="head"><h2>Seu pedido</h2><button class="x" id="closeOverlay">×</button></div>${cart.map((x,i)=>{const p=db.products.find(pp=>pp.id===x.productId);const canAddon=productAllowsAddons(p);const isChurrasco=productIsChurrasco(p);const rowTotal=x.price*x.qty+(x.addons||[]).reduce((s,a)=>s+a.price*a.qty*x.qty,0);const totalQtyForProduct=cart.filter(c=>c.productId===x.productId).reduce((s,c)=>s+c.qty,0);const itemAtMax=totalQtyForProduct>=getProductStock(p);const addonsHtml=(x.addons||[]).length?x.addons.map(a=>{const ad=db.addons.find(y=>y.id===a.id);const mx=productAddonMax(p,a.id);const last=a.qty<=1;const atMax=ad?a.qty>=mx||a.qty>=ad.stock:a.qty>=mx;return `<div class="addon-choice" style="margin-top:4px"><div><b>${esc(a.name)}</b><div class="meta">${money(a.price)} cada</div></div><div class="addon-counter"><button type="button" data-cart-addon-minus="${i}|${a.id}" aria-label="${last?'Remover':'Diminuir'} ${esc(a.name)}">${last?'✕':'−'}</button><span>${a.qty}</span><button type="button" data-cart-addon-plus="${i}|${a.id}" ${atMax?'disabled':''} aria-label="Aumentar ${esc(a.name)}">+</button></div></div>`}).join(''):'<div class="meta">Sem adicionais</div>';return `<div class="itemrow"><div class="row"><b>${x.qty}× ${esc(x.name)}</b><div class="addon-counter"><button type="button" data-item-minus="${i}" aria-label="${x.qty<=1?'Remover':'Diminuir'} ${esc(x.name)}">${x.qty<=1?'✕':'−'}</button><span>${x.qty}</span><button type="button" data-item-plus="${i}" ${itemAtMax?'disabled':''} aria-label="Aumentar ${esc(x.name)}">+</button></div></div><div class="meta">${money(x.price)} cada · Total do item: ${money(rowTotal)}</div>${addonsHtml}${isChurrasco?`<div class="field" style="margin-top:6px"><textarea data-cart-note="${i}" rows="1" placeholder="Observação (ex.: ponto da carne)">${esc(x.notes||'')}</textarea></div>`:''}${canAddon?`<button type="button" class="btn" data-cart-addaddon="${i}" style="margin-top:4px">+ Adicional</button>`:''}<button type="button" class="btn" data-rem="${i}" style="margin-top:4px">Remover item</button></div>`}).join('')||'<p class="meta">Carrinho vazio.</p>'}${cart.length?`<div class="field" style="margin-top:12px"><label>Observação geral (opcional)</label><textarea id="fCartNote" rows="2" placeholder="Ex.: observação sobre outros itens do pedido">${esc(typeof window.cartGeneralNote==='string'?window.cartGeneralNote:'')}</textarea></div>`:''}${formErr?`<div class="err">${esc(formErr)}</div>`:''}<div class="row" style="margin-top:12px"><b>Total</b><b class="price">${money(cartSubtotal())}</b></div>${cart.length?'<button class="primary" id="checkout">Finalizar pedido</button>':''}<button class="ghost" id="closeOverlay">Continuar comprando</button></div></div>`}
+ if(overlay==='cart'){return `<div class="overlay show"><div class="panel"><div class="head"><h2>Seu pedido</h2><button class="x" id="closeOverlay">×</button></div>${cart.map((x,i)=>{const p=db.products.find(pp=>pp.id===x.productId);const canAddon=productAllowsAddons(p);const isChurrasco=productIsChurrasco(p);const rowTotal=x.price*x.qty+(x.addons||[]).reduce((s,a)=>s+a.price*a.qty*x.qty,0);const totalQtyForProduct=cart.filter(c=>c.productId===x.productId).reduce((s,c)=>s+c.qty,0);const itemAtMax=totalQtyForProduct>=getProductStock(p);const addonsHtml=(x.addons||[]).length?x.addons.map(a=>{const ad=db.addons.find(y=>y.id===a.id);const mx=productAddonMax(p,a.id);const last=a.qty<=1;const atMax=ad?a.qty>=mx||a.qty>=ad.stock:a.qty>=mx;return `<div class="addon-choice" style="margin-top:4px"><div><b>${esc(a.name)}</b><div class="meta">${money(a.price)} cada</div></div><div class="addon-counter"><button type="button" data-cart-addon-minus="${i}|${a.id}" aria-label="${last?'Remover':'Diminuir'} ${esc(a.name)}">${last?'✕':'−'}</button><span>${a.qty}</span><button type="button" data-cart-addon-plus="${i}|${a.id}" ${atMax?'disabled':''} aria-label="Aumentar ${esc(a.name)}">+</button></div></div>`}).join(''):'<div class="meta">Sem adicionais</div>';return `<div class="itemrow"><div class="row"><b>${x.qty}× ${esc(x.name)}</b><div class="addon-counter"><button type="button" data-item-minus="${i}" aria-label="${x.qty<=1?'Remover':'Diminuir'} ${esc(x.name)}">${x.qty<=1?'✕':'−'}</button><span>${x.qty}</span><button type="button" data-item-plus="${i}" ${itemAtMax?'disabled':''} aria-label="Aumentar ${esc(x.name)}">+</button></div></div><div class="meta">${money(x.price)} cada · Total do item: ${money(rowTotal)}</div>${addonsHtml}${isChurrasco?`<div class="field" style="margin-top:6px"><textarea data-cart-note="${i}" rows="1" placeholder="Observação (ex.: ponto da carne)">${esc(x.notes||'')}</textarea></div>`:''}${canAddon?`<button type="button" class="btn" data-cart-addaddon="${i}" style="margin-top:4px">+ Adicional</button>`:''}<button type="button" class="btn" data-rem="${i}" style="margin-top:4px">Remover item</button></div>`}).join('')||'<p class="meta">Carrinho vazio.</p>'}${cart.length?`<div class="field" style="margin-top:12px"><label>Observação geral (opcional)</label><textarea id="fCartNote" rows="2" placeholder="Ex.: observação sobre outros itens do pedido">${esc(typeof window.cartGeneralNote==='string'?window.cartGeneralNote:'')}</textarea></div>`:''}${formErr?`<div class="err">${esc(formErr)}</div>`:''}<div class="row" style="margin-top:12px"><b>Total</b><b class="price">${money(cartSubtotal())}</b></div>${cart.length?'<button class="primary" id="checkout">Finalizar pedido</button>':''}<button class="ghost" id="closeCart">Continuar comprando</button></div></div>`}
  if(overlay==='checkout')return renderCheckout();
- if(overlay==='pdvSaved'){let o=db.orders.find(x=>x.id===window.lastOrderId);return `<div class="overlay show"><div class="panel"><div class="head"><h2>Pedido salvo</h2><button class="x" id="closeOverlay">×</button></div><p>Pedido <b>${o?.id||''}</b> salvo com sucesso.</p><button class="primary" id="printSavedPdv">🖨 Imprimir pedido</button>${o&&validPhone(o.customer.phone)?`<a class="primary" style="display:block;text-align:center;text-decoration:none;margin-top:8px" target="_blank" href="${notifyCustomerStart(o)}">💬 Enviar dados do pedido ao cliente</a>`:''}<button class="ghost" id="closeOverlay">Fechar</button></div></div>`}
- if(overlay==='confirm'){let o=db.orders.find(x=>x.id===window.lastOrderId);return `<div class="overlay show"><div class="panel"><div class="head"><h2>Pedido enviado 🔥</h2><button class="x" id="closeOverlay">×</button></div><p>Pedido <b>${o.id}</b> registrado. O WhatsApp do administrador deve ter aberto automaticamente com os dados do pedido — se isso não aconteceu (bloqueio de pop-up), use o botão abaixo.</p>${validPhone(db.settings.adminWhatsApp)?`<a class="primary" style="display:block;text-align:center;text-decoration:none;margin-top:12px" target="_blank" href="${notifyAdmin(o)}">Enviar pedido ao WhatsApp do administrador</a>`:'<div class="err">O administrador ainda não cadastrou um WhatsApp válido.</div>'}<p class="meta" style="margin-top:12px">As atualizações de status também podem ser enviadas ao WhatsApp do cliente.</p><button class="ghost" id="closeOverlay">Voltar ao cardápio</button></div></div>`}
+ if(overlay==='pdvSaved'){let o=db.orders.find(x=>x.id===window.lastOrderId);return `<div class="overlay show"><div class="panel"><div class="head"><h2>Pedido salvo</h2><button class="x" id="closeOverlay">×</button></div><p>Pedido <b>${o?.id||''}</b> salvo com sucesso.</p><button class="primary" id="printSavedPdv">🖨 Imprimir pedido</button>${o&&validPhone(o.customer.phone)?`<a class="primary" style="display:block;text-align:center;text-decoration:none;margin-top:8px" target="_blank" href="${notifyCustomerStart(o)}">💬 Enviar dados do pedido ao cliente</a>`:''}<button class="ghost" id="closePdvSaved">Fechar</button></div></div>`}
+ if(overlay==='confirm'){let o=db.orders.find(x=>x.id===window.lastOrderId);return `<div class="overlay show"><div class="panel"><div class="head"><h2>Pedido enviado 🔥</h2><button class="x" id="closeOverlay">×</button></div><p>Pedido <b>${o.id}</b> registrado. O WhatsApp do administrador deve ter aberto automaticamente com os dados do pedido — se isso não aconteceu (bloqueio de pop-up), use o botão abaixo.</p>${validPhone(db.settings.adminWhatsApp)?`<a class="primary" style="display:block;text-align:center;text-decoration:none;margin-top:12px" target="_blank" href="${notifyAdmin(o)}">Enviar pedido ao WhatsApp do administrador</a>`:'<div class="err">O administrador ainda não cadastrou um WhatsApp válido.</div>'}<p class="meta" style="margin-top:12px">As atualizações de status também podem ser enviadas ao WhatsApp do cliente.</p><button class="ghost" id="closeConfirm">Voltar ao cardápio</button></div></div>`}
 }
 function productAddonMax(p,aid){const a=db.addons.find(x=>x.id===aid);if(!a)return 0;const o=(p?.addons||[]).find(x=>x.id===aid);return o?Math.min(a.max,Number(o.max)||a.max):a.max}
 function ctxAddonProduct(){const ctx=window.addingCtx||{};const items=ctx.orderId?(db.orders.find(x=>x.id===ctx.orderId)?.items):(ctx.pdv?pdvDraft().items:(ctx.cart?cart:null));const it=items?items[ctx.itemIndex]:null;return it?db.products.find(x=>x.id===it.productId):null}
@@ -1123,7 +1123,7 @@ function renderOrderDetail(){
  <div class="pdv-footer-actions" style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
  ${o.customer.delivery==='entrega'?`<button type="button" class="btn" data-dispatch="${o.id}">🛵 Definir entregador</button>`:''}
  </div>
- <button class="ghost" id="closeOverlay">Fechar</button>
+ <button class="ghost" id="closeOrderDetail">Fechar</button>
  </div></div>`;
 }
 function orderRemoveOneItem(orderId,pid){
@@ -1162,7 +1162,7 @@ function renderDispatchDelivery(){
  <label class="chip" style="display:flex;align-items:center;gap:8px;margin-top:8px"><input type="checkbox" id="dispatchSendWa" ${d.sendWa?'checked':''}> Enviar mensagem para o entregador via WhatsApp</label>
  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  <button class="primary" id="confirmDispatch">Confirmar saída para entrega</button>
- <button class="ghost" id="closeOverlay">Cancelar</button>
+ <button class="ghost" id="cancelDispatch">Cancelar</button>
  </div></div>`;
 }
 function pdvDraft(){
@@ -1305,7 +1305,7 @@ function renderEditProductModal(){
  <label class="chip" style="margin-left:8px"><input type="checkbox" id="epActive" ${p.active?'checked':''}> Produto ativo</label>
  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  <button class="primary" id="saveEditProduct">Salvar alterações</button>
- <button class="ghost" id="closeOverlay">Cancelar</button>
+ <button class="ghost" id="cancelEditProduct">Cancelar</button>
  <button class="ghost" id="deleteProduct">Excluir produto</button>
  </div></div>`;
 }
@@ -1750,7 +1750,7 @@ function renderMovDetailDialog(){
  ${m.paymentCondition==='avista'&&m.paymentMethod?`<div class="itemrow"><div class="meta">Forma de pagamento</div><b>${esc(paymentMethodLabel(m.paymentMethod))}</b></div>`:''}
  ${m.paymentCondition==='boleto'&&m.paymentDueDate?`<div class="itemrow"><div class="meta">Data para pagamento</div><b>${esc(fmtDate(m.paymentDueDate))}</b></div>`:''}
  ${m.note?`<div class="itemrow"><div class="meta">Observação</div><b>${esc(m.note)}</b></div>`:''}
- <button class="ghost" id="closeOverlay" style="margin-top:8px">Fechar</button>
+ <button class="ghost" id="closeMovDetail" style="margin-top:8px">Fechar</button>
  </div></div>`;
 }
 function renderStockGeral(){
@@ -1897,7 +1897,7 @@ function renderCashMoveDialog(){
  <div class="field"><label>Tipo de Pagamento</label><select id="cmMethod"><option value="especie">Espécie (Dinheiro)</option><option value="pix">Pix</option></select></div>
  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  <button class="primary" id="confirmCashMove">${isIn?'Inserir dinheiro':'Retirar dinheiro'}</button>
- <button class="ghost" id="closeOverlay">Cancelar</button>
+ <button class="ghost" id="cancelCashMove">Cancelar</button>
  </div></div>`;
 }
 function renderCashToggleDialog(){
@@ -1906,7 +1906,7 @@ function renderCashToggleDialog(){
   <div class="field"><label>Valor inicial</label><input autocomplete="off" id="ctInitial" type="number" step=".01" min="0" placeholder="0,00"></div>
   ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
   <button class="primary" id="confirmCashToggle">Abrir caixa</button>
-  <button class="ghost" id="closeOverlay">Cancelar</button>
+  <button class="ghost" id="cancelCashToggle">Cancelar</button>
   </div></div>`;
  }
  const today=new Date().toISOString().slice(0,10);
@@ -1920,7 +1920,7 @@ function renderCashToggleDialog(){
  <div class="metric metric-4"><div><span class="meta">Saldo inicial</span><b>${money(db.cash.initial)}</b></div><div><span class="meta">Entradas</span><b class="pos">${money(sIns)}</b></div><div><span class="meta">Saídas</span><b class="neg">${money(sOuts)}</b></div><div><span class="meta">Saldo final</span><b>${money(saldo)}</b></div></div>
  <p class="meta" style="margin:10px 0">Confirme para encerrar a sessão de caixa atual.</p>
  <button class="primary danger" id="confirmCashToggle">Confirmar fechamento</button>
- <button class="ghost" id="closeOverlay">Cancelar</button>
+ <button class="ghost" id="cancelCashToggle">Cancelar</button>
  </div></div>`;
 }
 function renderCadastro(){
@@ -2054,7 +2054,7 @@ function renderNeighborhoodDialog(){
  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  <button class="primary" style="width:100%;margin-top:6px" id="saveNbDialog">${isEdit?'Salvar alterações':'Cadastrar taxa de entrega'}</button>
  ${isEdit?`<button class="danger" style="width:100%;margin-top:8px" id="deleteNbDialog">🗑️ Excluir esta taxa de entrega</button>`:''}
- <button class="ghost" id="closeOverlay" style="width:100%;margin-top:8px">Cancelar</button>
+ <button class="ghost" id="cancelNbDialog" style="width:100%;margin-top:8px">Cancelar</button>
  </div></div>`;
 }
 function renderSupplierDialog(){
@@ -2206,7 +2206,7 @@ function renderNewRiderDialog(){
  ${formErr?'<div class="err">'+esc(formErr)+'</div>':''}
  <button class="primary" id="addRider" style="width:100%;margin-top:14px">${isEdit?'Salvar alterações':'Cadastrar entregador'}</button>
  ${isEdit?`<button class="danger" style="width:100%;margin-top:8px" id="deleteRiderDialog">🗑️ Excluir este entregador</button>`:''}
- <button class="ghost" id="closeOverlay" style="width:100%">Cancelar</button>
+ <button class="ghost" id="cancelRiderDialog" style="width:100%">Cancelar</button>
  </div></div>`;
 }
 function materiaUnitOptionsHtml(selected){const units=['UN','KG','g','ml','L'];let extra=selected&&!units.includes(selected)?`<option value="${esc(selected)}" selected>${esc(selected)}</option>`:'';return extra+units.map(u=>`<option value="${u}" ${selected===u?'selected':''}>${u}</option>`).join('')}
@@ -2311,6 +2311,21 @@ function editOrder(orderId){
  o.total=o.items.reduce((s,x)=>s+x.price*x.qty+(x.addons||[]).reduce((a,b)=>a+b.price*x.qty,0),0);save();render();
 }
 
+function closeCurrentOverlay(){
+ if(overlay==='editProduct'&&window.editingProduct){
+  if(window.epIsNewDup){
+   // Cópia recém-criada e nunca confirmada com "Salvar alterações": desfaz a duplicação.
+   db.products=db.products.filter(x=>x.id!==window.editingProduct);
+   save();
+  }else if(window.epSnapshot){
+   // Descarta qualquer alteração feita durante a edição (receita, foto, adicionais etc.)
+   // que ainda não foi confirmada com "Salvar alterações".
+   let p=db.products.find(x=>x.id===window.editingProduct);
+   if(p){Object.keys(p).forEach(k=>delete p[k]);Object.assign(p,window.epSnapshot);save()}
+  }
+ }
+ overlay=null;window.riderDraft=null;window.editingRider=null;window.editingCategory=null;window.editingProduct=null;window.epSnapshot=null;window.epIsNewDup=false;window.epPhotoData=null;formErr='';render()
+}
 function attach(){
  document.getElementById('toggleAdminOps')?.addEventListener('click',()=>{window.adminOpsOpen=window.adminOpsOpen===false;render()});
  document.getElementById('togglePDVCreate')?.addEventListener('click',()=>{window.pdvHideCreate=!window.pdvHideCreate;render()});
@@ -2659,21 +2674,18 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  document.getElementById('downloadImportTemplate')?.addEventListener('click',downloadProductTemplate);
  document.getElementById('importProductsBtn')?.addEventListener('click',()=>{const f=document.getElementById('importProductsFile')?.files?.[0];if(!f){window.importMsg='Selecione um arquivo de planilha antes de importar.';window.importMsgType='err';render();return}importProductsFromSheet(f)});
  document.getElementById('newRiderBtn')?.addEventListener('click',()=>{window.editingRider=null;window.riderDraft={active:true};formErr='';overlay='newRider';render();setTimeout(()=>rName?.focus(),50)});
- document.getElementById('closeOverlay')?.addEventListener('click',()=>{
-  if(overlay==='editProduct'&&window.editingProduct){
-   if(window.epIsNewDup){
-    // Cópia recém-criada e nunca confirmada com "Salvar alterações": desfaz a duplicação.
-    db.products=db.products.filter(x=>x.id!==window.editingProduct);
-    save();
-   }else if(window.epSnapshot){
-    // Descarta qualquer alteração feita durante a edição (receita, foto, adicionais etc.)
-    // que ainda não foi confirmada com "Salvar alterações".
-    let p=db.products.find(x=>x.id===window.editingProduct);
-    if(p){Object.keys(p).forEach(k=>delete p[k]);Object.assign(p,window.epSnapshot);save()}
-   }
-  }
-  overlay=null;window.riderDraft=null;window.editingRider=null;window.editingCategory=null;window.editingProduct=null;window.epSnapshot=null;window.epIsNewDup=false;window.epPhotoData=null;formErr='';render()
- });
+ document.getElementById('closeOverlay')?.addEventListener('click',closeCurrentOverlay);
+ document.getElementById('cancelEditProduct')?.addEventListener('click',closeCurrentOverlay);
+ document.getElementById('cancelDispatch')?.addEventListener('click',closeCurrentOverlay);
+ document.getElementById('cancelCashMove')?.addEventListener('click',closeCurrentOverlay);
+ document.getElementById('cancelCashToggle')?.addEventListener('click',closeCurrentOverlay);
+ document.getElementById('cancelNbDialog')?.addEventListener('click',closeCurrentOverlay);
+ document.getElementById('cancelRiderDialog')?.addEventListener('click',closeCurrentOverlay);
+ document.getElementById('closeOrderDetail')?.addEventListener('click',closeCurrentOverlay);
+ document.getElementById('closeMovDetail')?.addEventListener('click',closeCurrentOverlay);
+ document.getElementById('closeCart')?.addEventListener('click',closeCurrentOverlay);
+ document.getElementById('closePdvSaved')?.addEventListener('click',closeCurrentOverlay);
+ document.getElementById('closeConfirm')?.addEventListener('click',closeCurrentOverlay);
  document.getElementById('rPlate')?.addEventListener('input',(e)=>{let input=e.target;let original=input.value;let formatted=formatPlate(original);input.value=formatted;let type=platePlateType(formatted);let plateInfo=document.getElementById('plateInfo');if(formatted){plateInfo.textContent='✓ '+type;plateInfo.style.color='#3d8b50'}else{plateInfo.textContent=formatted?'':'Formato: AAA0000 ou AAA0A00';plateInfo.style.color='var(--dim)'}});
  document.getElementById('rPhone')?.addEventListener('input',(e)=>{e.target.value=maskPhoneBR(e.target.value)});
  document.getElementById('rActiveToggle')?.addEventListener('click',()=>{window.riderDraft=window.riderDraft||{};window.riderDraft.active=!(window.riderDraft.active!==false);render()});
