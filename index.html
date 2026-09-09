@@ -240,6 +240,14 @@ td.neg{color:var(--red);font-weight:700}
 .stock-prod-name{background:none;border:0;padding:0;color:var(--cream);font-weight:700;cursor:pointer;text-align:left;font:inherit;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:2px}
 .stock-prod-name:hover{color:var(--ember)}
 .icon-btn.dup{color:var(--ok)}
+.lock-menu{position:relative;display:inline-block;flex-shrink:0}
+.lock-btn{width:38px;height:38px;border-radius:50%;background:var(--e2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer;padding:0}
+.lock-btn.active{background:var(--ember);border-color:var(--ember)}
+.lock-dropdown{display:none;position:absolute;right:0;top:calc(100% + 6px);background:var(--e);border:1px solid var(--line);border-radius:9px;box-shadow:0 8px 24px #0003;min-width:230px;z-index:100;overflow:hidden}
+.lock-dropdown.show{display:block}
+.lock-option{display:block;width:100%;text-align:left;padding:11px 14px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--cream);cursor:pointer;font-size:12.5px}
+.lock-option:last-child{border-bottom:0}
+.lock-option:hover{background:var(--e2)}
 @media(max-width:760px){.orderCardWrap{flex:0 0 200px}}
 </style><style id="client-mobile-only-style">
 .client .top .cart,.client .top #cartTop,.client .top [data-cart-top]{display:none!important}
@@ -1756,31 +1764,44 @@ function renderMovDetailDialog(){
 function renderStockGeral(){
  const unlocked=window.stockUnlocked===true;
  const orderUnlocked=window.catalogOrderUnlocked===true;
+ const priceUnlocked=window.stockPriceUnlocked===true;
+ const anyUnlocked=unlocked||orderUnlocked||priceUnlocked;
+ const menuOpen=window.stockLockMenuOpen===true;
  return `<div class="cardbox"><p class="meta">Para registrar entrada ou saída de qualquer produto (fora da receita) ou matéria-prima no estoque, use as abas ⬇️ Entradas e ⬆️ Saídas acima. Produtos com receita têm o estoque calculado automaticamente a partir das matérias-primas.</p></div>
- <div class="cardbox"><div class="row"><h3 style="margin:0">Edição em lote</h3><button class="btn ${unlocked?'primary':''}" id="toggleStockLock">${unlocked?'🔓 Bloquear edição':'🔒 Liberar edição de todos os itens'}</button></div>
- ${unlocked?'<p class="meta" style="margin-top:8px">Os campos de quantidade estão liberados. Informe o valor de cada item individualmente — cada campo é salvo separadamente.</p>':'<p class="meta" style="margin-top:8px">Toque no cadeado para liberar a edição da quantidade de todos os itens ao mesmo tempo.</p>'}
- <div class="row" style="margin-top:14px"><h3 style="margin:0">Ordenação de categorias e produtos</h3><button class="btn ${orderUnlocked?'primary':''}" id="toggleCatalogOrder">${orderUnlocked?'🔓 Bloquear ordenação':'🔒 Liberar ordenação de categorias e itens'}</button></div>
- <p class="meta" style="margin-top:8px">${orderUnlocked?'Use as setas ▲▼ para reorganizar a ordem das categorias e dos produtos dentro de cada categoria. Essa ordem também é usada no Cardápio e na página do cliente.':'Toque no cadeado para liberar a reordenação das categorias e dos itens dentro de cada categoria.'}</p>
+ <div class="cardbox"><div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
+ <h3 style="margin:0;flex:1;min-width:100px">Produtos</h3>
+ ${orderUnlocked?'':`<input autocomplete="off" id="stockSearchInput" placeholder="🔍 Pesquisar categoria ou produto..." value="${esc(window.stockSearch||'')}" style="flex:2;min-width:160px;background:var(--bg);border:1px solid var(--line);color:var(--cream);border-radius:7px;padding:9px 10px">`}
+ <div class="lock-menu">
+  <button type="button" class="lock-btn ${anyUnlocked?'active':''}" id="stockLockToggle" title="Edição em lote">${anyUnlocked?'🔓':'🔒'}</button>
+  <div class="lock-dropdown ${menuOpen?'show':''}" id="stockLockMenu">
+   <button type="button" class="lock-option" data-lock-toggle="order">${orderUnlocked?'🔓 Bloquear ordenação':'🔒 Desbloquear ordenação'}</button>
+   <button type="button" class="lock-option" data-lock-toggle="price">${priceUnlocked?'🔓 Bloquear edição de preço':'🔒 Desbloquear edição de preço'}</button>
+   <button type="button" class="lock-option" data-lock-toggle="stock">${unlocked?'🔓 Bloquear edição de estoque':'🔒 Desbloquear edição de estoque'}</button>
+  </div>
  </div>
- <div class="cardbox"><h3>Produtos</h3>${orderUnlocked?db.categories.map((c,ci)=>{const catProds=db.products.filter(p=>p.cat===c.id);return `<div class="menu-cat-head"><h3>${esc(c.name)}</h3><span class="order-arrows"><button type="button" data-movecat="${c.id}|up" ${ci===0?'disabled':''}>▲</button><button type="button" data-movecat="${c.id}|down" ${ci===db.categories.length-1?'disabled':''}>▼</button></span></div>${catProds.map((p,pi)=>`<div class="itemrow"><div class="row"><b>${esc(p.name)}</b><span class="order-arrows"><button type="button" data-moveprod="${p.id}|up" ${pi===0?'disabled':''}>▲</button><button type="button" data-moveprod="${p.id}|down" ${pi===catProds.length-1?'disabled':''}>▼</button></span></div></div>`).join('')||'<p class="meta">Nenhum produto nesta categoria.</p>'}` }).join('')||'<span class="meta">Nenhuma categoria cadastrada.</span>':`<div class="field" style="margin-bottom:12px"><input autocomplete="off" id="stockSearchInput" placeholder="🔍 Pesquisar categoria ou produto..." value="${esc(window.stockSearch||'')}"></div>${renderStockProductsByCategory(unlocked)}`}</div>
+ </div>
+ ${orderUnlocked?'<p class="meta" style="margin-top:8px">Use as setas ▲▼ para reorganizar a ordem das categorias e dos produtos dentro de cada categoria. Essa ordem também é usada no Cardápio e na página do cliente.</p>':''}
+ ${(priceUnlocked||unlocked)?`<p class="meta" style="margin-top:8px">${priceUnlocked&&unlocked?'Os campos de preço e de estoque estão liberados para edição direta na tabela.':priceUnlocked?'Os campos de preço estão liberados para edição direta na tabela.':'Os campos de estoque estão liberados para edição direta na tabela.'}</p>`:''}
+ <div style="margin-top:12px">${orderUnlocked?db.categories.map((c,ci)=>{const catProds=db.products.filter(p=>p.cat===c.id);return `<div class="menu-cat-head"><h3>${esc(c.name)}</h3><span class="order-arrows"><button type="button" data-movecat="${c.id}|up" ${ci===0?'disabled':''}>▲</button><button type="button" data-movecat="${c.id}|down" ${ci===db.categories.length-1?'disabled':''}>▼</button></span></div>${catProds.map((p,pi)=>`<div class="itemrow"><div class="row"><b>${esc(p.name)}</b><span class="order-arrows"><button type="button" data-moveprod="${p.id}|up" ${pi===0?'disabled':''}>▲</button><button type="button" data-moveprod="${p.id}|down" ${pi===catProds.length-1?'disabled':''}>▼</button></span></div></div>`).join('')||'<p class="meta">Nenhum produto nesta categoria.</p>'}` }).join('')||'<span class="meta">Nenhuma categoria cadastrada.</span>':renderStockProductsByCategory(unlocked,priceUnlocked)}</div>
+ </div>
  <div class="cardbox"><h3>Adicionais</h3>${db.addons.map(a=>`<div class="itemrow"><div class="row"><b>${esc(a.name)}</b>${unlocked?`<input autocomplete="off" data-editstock="addon|${a.id}" type="number" min="0" value="${a.stock}" style="width:90px;text-align:right;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:6px;padding:6px">`:`<span class="${a.stock?'price':'sold'}">${a.stock}</span>`}</div></div>`).join('')||'<span class="meta">Nenhum adicional cadastrado.</span>'}</div>`;
 }
-function renderStockProdRow(p,unlocked){
+function renderStockProdRow(p,unlocked,priceUnlocked){
  const st=getProductStock(p),hasR=productHasRecipe(p);
  return `<tr>
  <td><button type="button" class="stock-prod-name" data-editprod="${p.id}">${esc(p.name)}</button>${hasR?' <span class="tag">🧾 receita</span>':''}${p.type==='pi'?' <span class="tag">PI</span>':''}</td>
- <td class="price">${money(p.price)}</td>
+ <td>${priceUnlocked?`<input autocomplete="off" data-editprice="${p.id}" type="number" min="0" step=".01" value="${p.price}" style="width:80px;text-align:right;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:6px;padding:5px 6px">`:`<span class="price">${money(p.price)}</span>`}</td>
  <td>${unlocked&&!hasR?`<input autocomplete="off" data-editstock="product|${p.id}" type="number" min="0" value="${st}" style="width:70px;text-align:right;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:6px;padding:5px 6px">`:`<span class="${st?'':'sold'}">${st}</span>`}</td>
  <td style="text-align:center"><button type="button" class="toggle-btn ${p.active?'active':''}" data-togglestockprod="${p.id}" onclick="event.stopPropagation()" title="Ativar ou desativar este produto"></button></td>
  <td style="text-align:center"><button type="button" class="icon-btn dup" data-dupprod="${p.id}" onclick="event.stopPropagation()" title="Duplicar produto">📋</button></td>
  <td style="text-align:center"><button type="button" class="icon-btn" data-delprodstock="${p.id}" onclick="event.stopPropagation()" title="Excluir produto">🗑️</button></td>
  </tr>`;
 }
-function renderStockProdTable(catProds,unlocked){
+function renderStockProdTable(catProds,unlocked,priceUnlocked){
  if(!catProds.length)return '<p class="meta" style="padding:0 13px 13px">Nenhum produto nesta categoria.</p>';
- return `<div class="stock-table-wrap"><table class="stock-table"><thead><tr><th>Descrição</th><th>Preço</th><th>Estoque</th><th style="text-align:center">Ativo</th><th style="text-align:center">Duplicar</th><th style="text-align:center">Excluir</th></tr></thead><tbody>${catProds.map(p=>renderStockProdRow(p,unlocked)).join('')}</tbody></table></div>`;
+ return `<div class="stock-table-wrap"><table class="stock-table"><thead><tr><th>Descrição</th><th>Preço</th><th>Estoque</th><th style="text-align:center">Ativo</th><th style="text-align:center">Duplicar</th><th style="text-align:center">Excluir</th></tr></thead><tbody>${catProds.map(p=>renderStockProdRow(p,unlocked,priceUnlocked)).join('')}</tbody></table></div>`;
 }
-function renderStockProductsByCategory(unlocked){
+function renderStockProductsByCategory(unlocked,priceUnlocked){
  if(!db.categories.length&&!db.products.length)return '<span class="meta">Nenhuma categoria cadastrada.</span>';
  const q=normStr(window.stockSearch||'');
  const catBlock=c=>{
@@ -1789,14 +1810,14 @@ function renderStockProductsByCategory(unlocked){
   const catProds=(q&&!catNameMatches)?allProds.filter(p=>normStr(p.name).includes(q)):allProds;
   if(q&&!catNameMatches&&!catProds.length)return '';
   const open=(!!q||(window.stockCatOpen||{})[c.id])?' open':'';
-  return `<details class="stock-cat" data-stockcat="${c.id}"${open}><summary><div class="stock-cat-row"><button type="button" class="toggle-btn ${c.active!==false?'active':''}" data-togglecat="${c.id}" onclick="event.stopPropagation()" title="Ativar ou desativar esta categoria (visível/oculta para o cliente)"></button><span class="stock-cat-name">${esc(c.name)}</span><span class="tag">${allProds.length} produto${allProds.length===1?'':'s'}</span><span class="stock-cat-right"><button type="button" class="stock-cat-edit" data-editcat="${c.id}" onclick="event.stopPropagation()" title="Renomear categoria">✏️</button><span class="stock-cat-chevron">▾</span></span></div></summary>${renderStockProdTable(catProds,unlocked)}</details>`;
+  return `<details class="stock-cat" data-stockcat="${c.id}"${open}><summary><div class="stock-cat-row"><button type="button" class="toggle-btn ${c.active!==false?'active':''}" data-togglecat="${c.id}" onclick="event.stopPropagation()" title="Ativar ou desativar esta categoria (visível/oculta para o cliente)"></button><span class="stock-cat-name">${esc(c.name)}</span><span class="tag">${allProds.length} produto${allProds.length===1?'':'s'}</span><span class="stock-cat-right"><button type="button" class="stock-cat-edit" data-editcat="${c.id}" onclick="event.stopPropagation()" title="Renomear categoria">✏️</button><span class="stock-cat-chevron">▾</span></span></div></summary>${renderStockProdTable(catProds,unlocked,priceUnlocked)}</details>`;
  };
  let html=`<div class="stock-cat-list">${db.categories.map(catBlock).join('')||'<span class="meta">Nenhuma categoria cadastrada.</span>'}</div>`;
  const uncategorized=db.products.filter(p=>!db.categories.some(c=>c.id===p.cat));
  const uncatFiltered=q?uncategorized.filter(p=>normStr(p.name).includes(q)):uncategorized;
  if(uncatFiltered.length){
   const open=(!!q||(window.stockCatOpen||{}).__uncat)?' open':'';
-  html+=`<div class="stock-cat-list"><details class="stock-cat" data-stockcat="__uncat"${open}><summary><div class="stock-cat-row"><span class="stock-cat-name">Sem categoria</span><span class="tag">${uncatFiltered.length} produto${uncatFiltered.length===1?'':'s'}</span><span class="stock-cat-right"><span class="stock-cat-chevron">▾</span></span></div></summary>${renderStockProdTable(uncatFiltered,unlocked)}</details></div>`;
+  html+=`<div class="stock-cat-list"><details class="stock-cat" data-stockcat="__uncat"${open}><summary><div class="stock-cat-row"><span class="stock-cat-name">Sem categoria</span><span class="tag">${uncatFiltered.length} produto${uncatFiltered.length===1?'':'s'}</span><span class="stock-cat-right"><span class="stock-cat-chevron">▾</span></span></div></summary>${renderStockProdTable(uncatFiltered,unlocked,priceUnlocked)}</details></div>`;
  }
  return html;
 }
@@ -2647,7 +2668,6 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
   window.stockSaidaDraft={itemType:'',itemId:'',itemSearch:'',qty:1,note:'',reason:'Falta'};
   formErr='';save();render();
  });
- document.getElementById('toggleStockLock')?.addEventListener('click',()=>{window.stockUnlocked=!window.stockUnlocked;render()});
  document.querySelectorAll('[data-stockcat]').forEach(e=>e.addEventListener('toggle',()=>{window.stockCatOpen=window.stockCatOpen||{};window.stockCatOpen[e.dataset.stockcat]=e.open}));
  document.querySelectorAll('.stock-cat > summary').forEach(sum=>sum.addEventListener('click',ev=>{
   if(window.stockSearch)return;
@@ -2660,8 +2680,11 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
   render();
  }));
  document.querySelectorAll('[data-editstock]').forEach(e=>e.addEventListener('change',()=>{let [type,pid]=e.dataset.editstock.split('|'),o=(type==='product'?db.products:db.addons).find(x=>x.id===pid);if(o){o.stock=Math.max(0,Number(e.value||0));save()}}));
- document.getElementById('toggleCatalogOrder')?.addEventListener('click',()=>{window.catalogOrderUnlocked=!window.catalogOrderUnlocked;render()});
+ document.querySelectorAll('[data-editprice]').forEach(e=>e.addEventListener('change',()=>{let p=db.products.find(x=>x.id===e.dataset.editprice);if(p){p.price=Math.max(0,Number(e.value||0));save()}}));
  document.getElementById('stockSearchInput')?.addEventListener('input',e=>{window.stockSearch=e.target.value;render()});
+ document.getElementById('stockLockToggle')?.addEventListener('click',(ev)=>{ev.stopPropagation();window.stockLockMenuOpen=!window.stockLockMenuOpen;document.getElementById('stockLockMenu')?.classList.toggle('show',window.stockLockMenuOpen)});
+ document.querySelectorAll('[data-lock-toggle]').forEach(e=>e.addEventListener('click',(ev)=>{ev.stopPropagation();const k=e.dataset.lockToggle;if(k==='order')window.catalogOrderUnlocked=!window.catalogOrderUnlocked;else if(k==='price')window.stockPriceUnlocked=!window.stockPriceUnlocked;else if(k==='stock')window.stockUnlocked=!window.stockUnlocked;window.stockLockMenuOpen=true;render()}));
+ if(!window._lockMenuBound){window._lockMenuBound=true;document.addEventListener('click',ev=>{if(!ev.target.closest('.lock-menu')&&window.stockLockMenuOpen){window.stockLockMenuOpen=false;document.getElementById('stockLockMenu')?.classList.remove('show')}})}
  document.querySelectorAll('[data-togglecat]').forEach(e=>e.addEventListener('click',()=>{const c=db.categories.find(x=>x.id===e.dataset.togglecat);if(!c)return;c.active=c.active===false?true:false;save();render()}));
  document.querySelectorAll('[data-editcat]').forEach(e=>e.addEventListener('click',()=>{window.editingCategory=e.dataset.editcat;formErr='';overlay='editCategory';render()}));
  document.getElementById('saveEditCategory')?.addEventListener('click',()=>{const c=db.categories.find(x=>x.id===window.editingCategory);if(!c)return;const name=document.getElementById('ecName').value.trim();if(!name){formErr='Informe o nome da categoria.';render();return}c.name=name;c.active=!!document.getElementById('ecActive')?.checked;formErr='';overlay=null;window.editingCategory=null;save();render()});
