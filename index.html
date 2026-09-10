@@ -79,6 +79,11 @@
   .admin-side-collapsed .side{display:none!important}
   .admin-shell{display:block}
 }
+.top-left{display:flex;align-items:center;gap:14px}
+.menu-hamburger{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;background:transparent;border:0;padding:2px 6px;color:var(--dim);line-height:1;cursor:pointer;border-radius:6px}
+.menu-hamburger:hover{background:var(--e2)}
+.menu-hamburger .mh-label{font-size:9px;font-weight:800;letter-spacing:.5px}
+.menu-hamburger .mh-icon{font-size:19px;color:var(--cream)}
 </style><style id="pdv-cards-style">
 :root{--maroon:#6d1b3a;--maroon2:#b5497a;--navy:#1f3159;--navy2:#3a548c;--green2:#2f7d4f}
 .orders-toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
@@ -916,7 +921,7 @@ function renderCheckout(){
 }
 function renderAdmin(){
  if(!adminAuth)return `<div class="login-wrap" style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px"><div class="cardbox" style="max-width:360px;width:100%;text-align:center"><h2>🔥 Área administrativa</h2><p class="meta" style="margin:10px 0 15px">Pedidos, PDV, estoque e configurações.</p><input id="adminPass" type="password" placeholder="Senha" style="width:100%;padding:11px;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:7px">${formErr?`<div class="err">${esc(formErr)}</div>`:''}<button class="primary" id="doLogin">Entrar</button><a class="btn" href="#cliente" style="display:block;margin-top:8px;text-decoration:none">Voltar ao cliente</a></div></div>`;
- return `<div class="admin mobile-layout auto-responsive"><div class="top"><div class="brand">🔥 Novo Cheff <span>BBQ · Administração</span></div><div class="actions"><button class="btn mobileMenu" id="openAdminMenu">☰ Menu</button><button class="btn admin-menu-toggle" id="toggleAdminOps">${window.adminOpsOpen===false?'☰ Menu operações':'☰ Ocultar operações'}</button><a class="btn" href="#cliente">Cliente</a><button class="btn" id="logout">Sair</button></div></div>
+ return `<div class="admin mobile-layout auto-responsive"><div class="top"><div class="top-left"><button class="menu-hamburger" id="menuToggle" aria-label="Abrir ou fechar menu" title="Menu"><span class="mh-label">MENU</span><span class="mh-icon">☰</span></button><div class="brand">🔥 Novo Cheff <span>BBQ · Administração</span></div></div><div class="actions"><a class="btn" href="#cliente">Cliente</a><button class="btn" id="logout">Sair</button></div></div>
  <div class="mobile-admin-nav ${mobileAdminNavOpen?'show':''}" id="mobileAdminNav">${adminNav()}</div>
  <div class="adminlayout admin-shell ${window.adminOpsOpen===false?'admin-side-collapsed':''}"><aside class="side">${adminNav()}</aside><main class="main">${renderAdminTab()}</main></div>${overlay?renderOverlay():''}</div>`;
 }
@@ -2348,7 +2353,7 @@ function closeCurrentOverlay(){
  overlay=null;window.riderDraft=null;window.editingRider=null;window.editingCategory=null;window.editingProduct=null;window.epSnapshot=null;window.epIsNewDup=false;window.epPhotoData=null;formErr='';render()
 }
 function attach(){
- document.getElementById('toggleAdminOps')?.addEventListener('click',()=>{window.adminOpsOpen=window.adminOpsOpen===false;render()});
+ document.getElementById('menuToggle')?.addEventListener('click',()=>{window.adminOpsOpen=window.adminOpsOpen===false;mobileAdminNavOpen=!mobileAdminNavOpen;render()});
  document.getElementById('togglePDVCreate')?.addEventListener('click',()=>{window.pdvHideCreate=!window.pdvHideCreate;render()});
  document.getElementById('ordersFilterStatus')?.addEventListener('change',e=>{window.pdvOrderFilter=window.pdvOrderFilter||{status:'ativos',search:''};window.pdvOrderFilter.status=e.target.value;render()});
  document.getElementById('ordersSearch')?.addEventListener('input',e=>{window.pdvOrderFilter=window.pdvOrderFilter||{status:'ativos',search:''};window.pdvOrderFilter.search=e.target.value;const board=document.getElementById('ordersBoard');if(board){board.innerHTML=filteredOrders().map(o=>renderOrder(o)).join('')||'<div class="empty-state">Nenhum pedido encontrado.</div>';bindOrderCard(board)}});
@@ -2440,7 +2445,6 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  document.getElementById('doLogin')?.addEventListener('click',()=>{if(document.getElementById('adminPass').value===ADMIN_PASSWORD){adminAuth=true;formErr='';render()}else{formErr='Senha incorreta.';render()}});
  document.getElementById('logout')?.addEventListener('click',()=>{adminAuth=false;location.hash=ADMIN_ROUTE_HASH;render()});
  document.querySelectorAll('[data-tab]').forEach(e=>e.onclick=()=>{const t=e.dataset.tab;if(t==='cadastro'||t==='relatorios'||t==='caixa'){window.navOpen=window.navOpen||{};window.navOpen[t]=!window.navOpen[t];render();return}tab=t;render()});
- document.getElementById('openAdminMenu')?.addEventListener('click',()=>{mobileAdminNavOpen=!mobileAdminNavOpen;render()});
  document.querySelectorAll('#mobileAdminNav [data-tab]').forEach(e=>e.onclick=()=>{const t=e.dataset.tab;if(t==='cadastro'||t==='relatorios'||t==='caixa'){window.navOpen=window.navOpen||{};window.navOpen[t]=!window.navOpen[t];render();return}tab=t;mobileAdminNavOpen=false;render()});
  document.querySelectorAll('#mobileAdminNav [data-report-view]').forEach(e=>e.onclick=()=>{tab='relatorios';window.reportView=e.dataset.reportView;mobileAdminNavOpen=false;render()});
  document.querySelectorAll('#mobileAdminNav [data-cadastro-view]').forEach(e=>e.onclick=()=>{tab='cadastro';window.cadastroView=e.dataset.cadastroView;mobileAdminNavOpen=false;render()});
