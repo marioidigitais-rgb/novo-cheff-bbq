@@ -247,6 +247,7 @@ td.neg{color:var(--red);font-weight:700}
 .stock-prod-name{background:none;border:0;padding:0;color:var(--cream);font-weight:700;cursor:pointer;text-align:left;font:inherit;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:2px}
 .stock-prod-name:hover{color:var(--ember)}
 .icon-btn.dup{color:var(--ok)}
+.icon-btn.edit{color:var(--dim)}
 .lock-menu{position:relative;display:inline-block;flex-shrink:0}
 .lock-btn{width:38px;height:38px;border-radius:50%;background:var(--e2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer;padding:0}
 .lock-btn.active{background:var(--ember);border-color:var(--ember)}
@@ -845,6 +846,90 @@ function formatPlate(v){let d=String(v||'').toUpperCase().replace(/[^A-Z0-9]/g,'
 function validPlate(v){let p=String(v||'').toUpperCase().replace(/[^A-Z0-9]/g,'');let mercosul=/^[A-Z]{3}\d[A-Z]\d{2}$/;let normal=/^[A-Z]{3}\d{4}$/;return mercosul.test(p)||normal.test(p)}
 function platePlateType(v){let p=String(v||'').toUpperCase().replace(/[^A-Z0-9]/g,'');if(/^[A-Z]{3}\d[A-Z]\d{2}$/.test(p))return 'Mercosul';if(/^[A-Z]{3}\d{4}$/.test(p))return 'Placa Normal';return ''}
 function nextCustomerCode(){db.customerSeq=(db.customerSeq||0)+1;return {codeNum:db.customerSeq,code:'CLI'+String(db.customerSeq).padStart(4,'0')}}
+function customerOrderStats(c){
+ if(!c?.phone)return {count:0,lastDate:null,daysSince:null};
+ const os=db.orders.filter(o=>o.customer?.phone===c.phone);
+ if(!os.length)return {count:0,lastDate:null,daysSince:null};
+ const lastDate=os.reduce((max,o)=>{const d=new Date(o.createdAt);return d>max?d:max},new Date(os[0].createdAt));
+ const daysSince=Math.max(0,Math.floor((Date.now()-lastDate.getTime())/86400000));
+ return {count:os.length,lastDate,daysSince};
+}
+function renderCadastroClientes(){
+ window.custSearch=window.custSearch||'';
+ const q=window.custSearch.trim().toLowerCase();
+ const qDigits=q.replace(/\D/g,'');
+ let list=db.customers;
+ if(q)list=list.filter(c=>(c.name||'').toLowerCase().includes(q)||(qDigits&&(c.phone||'').replace(/\D/g,'').includes(qDigits)));
+ return `<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:14px">
+ <h2 style="margin:0">Clientes</h2>
+ <div style="display:flex;gap:8px;flex:1;min-width:230px;max-width:560px">
+  <input autocomplete="off" id="custSearchInput" type="search" placeholder="🔍 Pesquise por nome ou telefone" value="${esc(window.custSearch)}" style="flex:1;background:var(--e);border:1px solid var(--line);border-radius:7px;padding:9px 11px;color:var(--cream)">
+  <button class="primary" id="newCustomerBtn" style="width:auto;white-space:nowrap;margin-top:0;padding:9px 16px">➕ Novo</button>
+ </div>
+ </div>
+ <div class="cardbox" style="padding:0;overflow:auto">
+ <table class="table">
+  <thead><tr>
+   <th>ID</th>
+   <th>Nome</th>
+   <th>Telefone</th>
+   <th>Pedidos</th>
+   <th>Última compra</th>
+   <th>Dias sem comprar</th>
+   <th></th>
+   <th></th>
+  </tr></thead>
+  <tbody>${list.length?list.map(c=>{
+   const st=customerOrderStats(c);
+   return `<tr class="itemrow-clickable" data-clickcustomer="${c.id}" style="cursor:pointer">
+    <td>${esc(c.code||'—')}</td>
+    <td><b>${esc(c.name)}</b></td>
+    <td>${c.phone?esc(fmtPhoneDisplay(c.phone)):'<span class="meta">—</span>'}</td>
+    <td>${st.count}</td>
+    <td>${st.lastDate?st.lastDate.toLocaleDateString('pt-BR'):'<span class="meta">—</span>'}</td>
+    <td>${st.daysSince!=null?st.daysSince:'<span class="meta">—</span>'}</td>
+    <td style="text-align:center" onclick="event.stopPropagation()"><button type="button" class="icon-btn edit" data-editcustomer="${c.id}" title="Editar cadastro">✏️</button></td>
+    <td style="text-align:center" onclick="event.stopPropagation()"><button type="button" class="icon-btn" data-delcustomer="${c.id}" title="Excluir cliente">🗑️</button></td>
+   </tr>`;
+  }).join(''):`<tr><td colspan="8" class="meta" style="text-align:center;padding:20px">${window.custSearch?'Nenhum cliente encontrado.':'Nenhum cliente cadastrado.'}</td></tr>`}</tbody>
+ </table>
+ </div>`;
+}
+function renderCustomerDialog(){
+ const isEdit=!!window.editingCustomer;
+ const c=isEdit?db.customers.find(x=>x.id===window.editingCustomer):null;
+ const d=window.custDraft||{};
+ return `<div class="overlay show"><div class="panel">
+ <div class="head"><h2>${isEdit?'Editar cliente':'Novo cliente'}</h2><button class="x" id="closeOverlay">×</button></div>
+ <div class="field"><label>Nome</label><input autocomplete="off" id="custName" placeholder="Nome completo" value="${esc(d.name||'')}"></div>
+ <div class="field"><label>WhatsApp (opcional)</label>${phoneInputHtml('custPhone',d.phone||'',true)}</div>
+ <div class="field"><label>Endereço para entrega</label><div class="grid2"><input autocomplete="off" id="custStreet" placeholder="Rua / avenida" value="${esc(d.street||'')}"><input autocomplete="off" id="custNumber" placeholder="Número da casa" value="${esc(d.number||'')}"><input autocomplete="off" id="custComplement" placeholder="Complemento" value="${esc(d.complement||'')}"><input autocomplete="off" id="custReference" placeholder="Ponto de referência" value="${esc(d.reference||'')}"></div></div>
+ <div class="field"><label>Bairro</label><select id="custNeighborhood"><option value="">Selecione o bairro</option>${neighborhoodOptionsHtml(d.neighborhood||'')}</select><div id="custFee" class="meta" style="margin-top:6px">${(()=>{const n=db.neighborhoods.find(x=>x.id===d.neighborhood);return n?`Taxa de entrega: ${money(n.fee)}`:'Selecione o bairro para visualizar a taxa de entrega.'})()}</div></div>
+ ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
+ <button class="primary" id="saveCustomerDialog">${isEdit?'Salvar alterações':'Cadastrar cliente'}</button>
+ ${isEdit?`<div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
+  <div class="meta" style="margin-bottom:8px">💰 Crédito disponível: <b style="color:${Number(c.credit||0)>0?'var(--ok)':'inherit'}">${money(Number(c.credit||0))}</b> <button class="btn" data-creditadj="${c.id}" style="padding:2px 7px;font-size:10px">Ajustar crédito</button></div>
+  <div class="meta" style="margin-bottom:6px">Outros endereços</div>
+  ${customerAddresses(c).map(a=>`<div class="meta" style="margin-top:6px">📍 ${a.label?esc(a.label)+' · ':''}${esc(a.street)}, ${esc(a.number)}${a.complement?' · '+esc(a.complement):''}${a.reference?' · Ref.: '+esc(a.reference):''}${a.neighborhoodName?' · '+esc(a.neighborhoodName):''}${a.neighborhoodFee!=null?' · Taxa: '+money(a.neighborhoodFee):''} ${c.defaultAddressId===a.id?'<span class="tag">Padrão</span>':`<button class="btn" data-setdefaultaddr="${c.id}|${a.id}" style="padding:2px 7px;font-size:10px">Tornar padrão</button>`} <button class="btn" data-deladdr="${c.id}|${a.id}" style="padding:2px 7px;font-size:10px">Excluir</button></div>`).join('')||'<div class="meta">Nenhum endereço cadastrado.</div>'}
+  <button class="btn" data-addaddr="${c.id}" style="margin-top:7px">+ Adicionar novo endereço</button>
+ </div>
+ <button class="danger" style="width:100%;margin-top:14px" id="deleteCustomerDialog">🗑️ Excluir este cliente</button>`:''}
+ </div></div>`;
+}
+function renderCustomerOrderHistory(){
+ const c=db.customers.find(x=>x.id===window.viewingCustomerHistory);if(!c)return '';
+ const orders=db.orders.filter(o=>c.phone&&o.customer?.phone===c.phone).slice().sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+ return `<div class="overlay show"><div class="panel">
+ <div class="head"><h2>Histórico · ${esc(c.name)}</h2><button class="x" id="closeOverlay">×</button></div>
+ <div class="meta" style="margin-bottom:10px">${orders.length} pedido(s) encontrado(s)${c.phone?' · '+esc(fmtPhoneDisplay(c.phone)):''}</div>
+ ${orders.length?orders.map(o=>`<div class="itemrow">
+  <div class="row"><b>${esc(o.id)}</b><span class="tag">${orderTypeLabel(o)}</span></div>
+  <div class="meta">${new Date(o.createdAt).toLocaleString('pt-BR')} · ${o.status}</div>
+  <div class="meta" style="margin-top:4px">${groupItemsForDisplay(o.items).map(x=>`${x.qty}x ${esc(x.name)}`).join(', ')}</div>
+  <div class="row" style="margin-top:6px"><b class="price">${money(o.total)}</b><button type="button" class="btn" data-copyorder="${o.id}">📋 Copiar pedido</button></div>
+ </div>`).join(''):'<p class="meta">Nenhum pedido encontrado para este cliente.</p>'}
+ </div></div>`;
+}
 function neighborhoodOptionsHtml(selected){return activeNeighborhoods(selected).map(n=>`<option value="${n.id}" ${selected===n.id?'selected':''}>${esc(n.name)} · ${money(n.fee)}</option>`).join('')+'<option value="__new__">+ Cadastrar novo bairro</option>'}
 
 function wa(phone,text){return 'https://wa.me/'+String(phone||'').replace(/\D/g,'')+'?text='+encodeURIComponent(text)}
@@ -913,6 +998,8 @@ function renderOverlay(){
  if(overlay==='editCategory')return renderEditCategoryModal();
  if(overlay==='clientLogin')return renderClientLogin();
  if(overlay==='addCustomerAddress')return renderAddCustomerAddress();
+ if(overlay==='customerDialog')return renderCustomerDialog();
+ if(overlay==='customerHistory')return renderCustomerOrderHistory();
  if(overlay==='addNeighborhoodQuick')return renderAddNeighborhoodQuick();
  if(overlay==='addonDialog')return renderAddonDialog();
  if(overlay==='paymentMethodDialog')return renderPaymentMethodDialog();
@@ -2012,21 +2099,7 @@ function renderCadastro(){
  window.cadastroView=window.cadastroView||'clientes';
  return ({clientes:renderCadastroClientes,fornecedores:renderCadastroFornecedores,entregadores:renderCadastroEntregadores,adicionais:renderCadastroAdicionais,materias:renderCadastroMaterias,receitas:renderCadastroReceitas,pagamento:renderCadastroPagamento,taxas:renderCadastroTaxas}[window.cadastroView]||renderCadastroClientes)();
 }
-function renderCadastroClientes(){
- const d=window.custDraft||{};
- return `<h2>Cadastro · Clientes</h2>
- <div class="cardbox"><h3>Novo cliente</h3>
- <div class="field"><label>Nome</label><input autocomplete="off" id="custName" placeholder="Nome completo" value="${esc(d.name||'')}"></div>
- <div class="field"><label>WhatsApp (opcional)</label>${phoneInputHtml('custPhone',d.phone||'',true)}</div>
- <div class="field"><label>Endereço para entrega</label><div class="grid2"><input autocomplete="off" id="custStreet" placeholder="Rua / avenida" value="${esc(d.street||'')}"><input autocomplete="off" id="custNumber" placeholder="Número da casa" value="${esc(d.number||'')}"><input autocomplete="off" id="custComplement" placeholder="Complemento" value="${esc(d.complement||'')}"><input autocomplete="off" id="custReference" placeholder="Ponto de referência" value="${esc(d.reference||'')}"></div></div>
- <div class="field"><label>Bairro</label><select id="custNeighborhood"><option value="">Selecione o bairro</option>${neighborhoodOptionsHtml(d.neighborhood||'')}</select><div id="custFee" class="meta" style="margin-top:6px">Selecione o bairro para visualizar a taxa de entrega.</div></div>
- <button class="primary" id="addCustomer">Cadastrar cliente</button></div>
- <div class="cardbox"><h3>Clientes cadastrados</h3>${db.customers.map(c=>`<div class="itemrow"><b>${esc(c.name)}</b> <span class="tag">${esc(c.code||'')}</span>${c.phone?' · '+esc(fmtPhoneDisplay(c.phone)):' · Sem WhatsApp'}
- <div class="meta" style="margin-top:6px">💰 Crédito disponível: <b style="color:${Number(c.credit||0)>0?'var(--ok)':'inherit'}">${money(Number(c.credit||0))}</b> <button class="btn" data-creditadj="${c.id}" style="padding:2px 7px;font-size:10px">Ajustar crédito</button></div>
- ${customerAddresses(c).map(a=>`<div class="meta" style="margin-top:6px">📍 ${a.label?esc(a.label)+' · ':''}${esc(a.street)}, ${esc(a.number)}${a.complement?' · '+esc(a.complement):''}${a.reference?' · Ref.: '+esc(a.reference):''}${a.neighborhoodName?' · '+esc(a.neighborhoodName):''}${a.neighborhoodFee!=null?' · Taxa: '+money(a.neighborhoodFee):''} ${c.defaultAddressId===a.id?'<span class="tag">Padrão</span>':`<button class="btn" data-setdefaultaddr="${c.id}|${a.id}" style="padding:2px 7px;font-size:10px">Tornar padrão</button>`} <button class="btn" data-deladdr="${c.id}|${a.id}" style="padding:2px 7px;font-size:10px">Excluir</button></div>`).join('')||'<div class="meta" style="margin-top:6px">Nenhum endereço cadastrado.</div>'}
- <button class="btn" data-addaddr="${c.id}" style="margin-top:7px">+ Adicionar novo endereço</button>
- </div>`).join('')||'<span class="meta">Nenhum cliente cadastrado.</span>'}</div>`;
-}
+
 function renderCadastroFornecedores(){
  return `<h2>Cadastro · Fornecedores</h2>
  <div class="cardbox">
@@ -2912,16 +2985,23 @@ document.getElementById('deleteAddonDialog')?.addEventListener('click',()=>{if(!
  document.getElementById('pmFixed')?.addEventListener('input',moneyMaskOnInput);
  document.getElementById('savePaymentMethod')?.addEventListener('click',()=>{let n=document.getElementById('pmName').value.trim();if(!n){formErr='Informe o nome da forma de pagamento.';render();return}const sign=(window.paymentMethodDraft?.adjustType==='desconto')?-1:1;const fee=sign*Math.abs(Number(document.getElementById('pmPercent').value||0));const feeFixed=sign*moneyMaskParse(document.getElementById('pmFixed').value);const showClient=document.getElementById('pmShowClient')?.checked??true;if(window.editingPaymentMethod){let p=db.payments.find(x=>x.id===window.editingPaymentMethod);if(!p)return;p.name=n;p.fee=fee;p.feeFixed=feeFixed;p.showClient=showClient;window.editingPaymentMethod=null}else{db.payments.push({id:id('pay'),name:n,fee,feeFixed,active:true,showClient})}window.paymentMethodDraft={};formErr='';overlay=null;save();render()});
  document.getElementById('deletePaymentMethod')?.addEventListener('click',()=>{if(!window.editingPaymentMethod)return;if(!confirm('Excluir esta forma de pagamento?'))return;db.payments=db.payments.filter(x=>x.id!==window.editingPaymentMethod);window.editingPaymentMethod=null;window.paymentMethodDraft={};overlay=null;save();render()});
- document.getElementById('addCustomer')?.addEventListener('click',()=>{let n=custName.value.trim(),ph=custPhone.value.trim(),street=custStreet.value.trim(),num=custNumber.value.trim(),comp=custComplement.value.trim(),ref=custReference.value.trim(),nid=custNeighborhood.value,nb=db.neighborhoods.find(x=>x.id===nid);if(!n)return alert('Informe o nome.');if(ph&&!validPhone(ph))return alert('WhatsApp inválido. Informe DDD + 9 dígitos.');if(!street||!num||!nid)return alert('Informe rua, número e bairro para o endereço de entrega.');const nc=nextCustomerCode();let c={id:id('c'),codeNum:nc.codeNum,code:nc.code,name:n,phone:ph?fmtPhone(ph):'',addresses:[],defaultAddressId:'',credit:0};let addr={id:id('addr'),label:'Principal',street,number:num,complement:comp,reference:ref,neighborhood:nid,neighborhoodName:nb.name,neighborhoodFee:nb.fee};c.addresses.push(addr);c.defaultAddressId=addr.id;syncCustomerLegacyAddress(c);db.customers.push(c);window.custDraft=null;save();render()});
+ document.getElementById('saveCustomerDialog')?.addEventListener('click',()=>{let n=custName.value.trim(),ph=custPhone.value.trim(),street=custStreet.value.trim(),num=custNumber.value.trim(),comp=custComplement.value.trim(),ref=custReference.value.trim(),nid=custNeighborhood.value,nb=db.neighborhoods.find(x=>x.id===nid);if(!n){formErr='Informe o nome.';render();return}if(ph&&!validPhone(ph)){formErr='WhatsApp inválido. Informe DDD + 9 dígitos.';render();return}if(!street||!num||!nid){formErr='Informe rua, número e bairro para o endereço de entrega.';render();return}if(window.editingCustomer){let c=db.customers.find(x=>x.id===window.editingCustomer);if(!c)return;c.name=n;c.phone=ph?fmtPhone(ph):'';let addr=customerDefaultAddress(c);if(addr){addr.street=street;addr.number=num;addr.complement=comp;addr.reference=ref;addr.neighborhood=nid;addr.neighborhoodName=nb.name;addr.neighborhoodFee=nb.fee}else{addr={id:id('addr'),label:'Principal',street,number:num,complement:comp,reference:ref,neighborhood:nid,neighborhoodName:nb.name,neighborhoodFee:nb.fee};c.addresses=c.addresses||[];c.addresses.push(addr);c.defaultAddressId=addr.id}syncCustomerLegacyAddress(c);window.editingCustomer=null}else{const nc=nextCustomerCode();let c={id:id('c'),codeNum:nc.codeNum,code:nc.code,name:n,phone:ph?fmtPhone(ph):'',addresses:[],defaultAddressId:'',credit:0};let addr={id:id('addr'),label:'Principal',street,number:num,complement:comp,reference:ref,neighborhood:nid,neighborhoodName:nb.name,neighborhoodFee:nb.fee};c.addresses.push(addr);c.defaultAddressId=addr.id;syncCustomerLegacyAddress(c);db.customers.push(c)}window.custDraft=null;formErr='';overlay=null;save();render()});
+ document.getElementById('newCustomerBtn')?.addEventListener('click',()=>{window.editingCustomer=null;window.custDraft={};formErr='';overlay='customerDialog';render()});
+ document.getElementById('custSearchInput')?.addEventListener('input',e=>{window.custSearch=e.target.value;render()});
+ document.querySelectorAll('[data-clickcustomer]').forEach(e=>e.onclick=()=>{window.viewingCustomerHistory=e.dataset.clickcustomer;overlay='customerHistory';render()});
+ document.querySelectorAll('[data-editcustomer]').forEach(e=>e.onclick=()=>{let c=db.customers.find(x=>x.id===e.dataset.editcustomer);if(!c)return;window.editingCustomer=c.id;const addr=customerDefaultAddress(c);window.custDraft={name:c.name,phone:c.phone,street:addr?.street||'',number:addr?.number||'',complement:addr?.complement||'',reference:addr?.reference||'',neighborhood:addr?.neighborhood||''};formErr='';overlay='customerDialog';render()});
+ document.querySelectorAll('[data-delcustomer]').forEach(e=>e.onclick=()=>{let c=db.customers.find(x=>x.id===e.dataset.delcustomer);if(!c)return;if(!confirm(`Excluir o cliente "${c.name}"? Essa ação não pode ser desfeita.`))return;db.customers=db.customers.filter(x=>x.id!==c.id);save();render()});
+ document.getElementById('deleteCustomerDialog')?.addEventListener('click',()=>{if(!window.editingCustomer)return;let c=db.customers.find(x=>x.id===window.editingCustomer);if(!c)return;if(!confirm(`Excluir o cliente "${c.name}"? Essa ação não pode ser desfeita.`))return;db.customers=db.customers.filter(x=>x.id!==window.editingCustomer);window.editingCustomer=null;window.custDraft=null;overlay=null;save();render()});
+ document.querySelectorAll('[data-copyorder]').forEach(e=>e.onclick=()=>{const o=db.orders.find(x=>x.id===e.dataset.copyorder);if(!o)return;const items=o.items.map(x=>({productId:x.productId,name:x.name,price:x.price,qty:x.qty,addons:(x.addons||[]).map(a=>({...a})),notes:x.notes||''}));const mode=o.customer.delivery==='local'?'local':o.customer.delivery==='entrega'?'entrega':'retirada';const cust=db.customers.find(x=>x.id===window.viewingCustomerHistory);window.pdvDraftData={customerId:cust?.id||'',customerSearch:cust?.name||o.customer.name||'',mode,table:o.customer.table||'',address:o.customer.address||'',number:o.customer.number||'',complement:o.customer.complement||'',neighborhood:o.customer.neighborhood||'',items,surcharge:0,discount:0,tendered:'',notes:'',useCredit:false,payments:[{payment:'',amount:0}]};window.pdvHideCreate=false;overlay=null;window.viewingCustomerHistory=null;tab='pedidos';formErr='';render()});
  document.querySelectorAll('[data-addaddr]').forEach(e=>e.onclick=()=>{window.addingAddressFor=e.dataset.addaddr;window.addrDraft=null;formErr='';overlay='addCustomerAddress';render()});
  document.getElementById('newAddrNeighborhood')?.addEventListener('change',e=>{if(e.target.value==='__new__'){window.addrDraft={label:newAddrLabel.value,street:newAddrStreet.value,number:newAddrNumber.value,complement:newAddrComplement.value,reference:newAddrReference.value,neighborhood:''};window.newNbDraft={};window.neighborhoodDialogTarget='addr';formErr='';overlay='addNeighborhoodQuick';render()}});
  ['newAddrLabel','newAddrStreet','newAddrNumber','newAddrComplement','newAddrReference'].forEach(fid=>document.getElementById(fid)?.addEventListener('input',e=>{window.addrDraft=window.addrDraft||{};const m={newAddrLabel:'label',newAddrStreet:'street',newAddrNumber:'number',newAddrComplement:'complement',newAddrReference:'reference'};window.addrDraft[m[fid]]=e.target.value}));
- document.getElementById('saveNewCustomerAddress')?.addEventListener('click',()=>{const c=db.customers.find(x=>x.id===window.addingAddressFor);if(!c)return;const street=newAddrStreet.value.trim(),num=newAddrNumber.value.trim(),nid=newAddrNeighborhood.value,nb=db.neighborhoods.find(x=>x.id===nid);if(!street||!num||!nid){formErr='Informe rua, número e bairro.';render();return}const addr={id:id('addr'),label:newAddrLabel.value.trim(),street,number:num,complement:newAddrComplement.value.trim(),reference:newAddrReference.value.trim(),neighborhood:nid,neighborhoodName:nb.name,neighborhoodFee:nb.fee};c.addresses=c.addresses||[];c.addresses.push(addr);if(!c.defaultAddressId)c.defaultAddressId=addr.id;syncCustomerLegacyAddress(c);overlay=null;window.addingAddressFor=null;window.addrDraft=null;formErr='';save();render()});
+ document.getElementById('saveNewCustomerAddress')?.addEventListener('click',()=>{const c=db.customers.find(x=>x.id===window.addingAddressFor);if(!c)return;const street=newAddrStreet.value.trim(),num=newAddrNumber.value.trim(),nid=newAddrNeighborhood.value,nb=db.neighborhoods.find(x=>x.id===nid);if(!street||!num||!nid){formErr='Informe rua, número e bairro.';render();return}const addr={id:id('addr'),label:newAddrLabel.value.trim(),street,number:num,complement:newAddrComplement.value.trim(),reference:newAddrReference.value.trim(),neighborhood:nid,neighborhoodName:nb.name,neighborhoodFee:nb.fee};c.addresses=c.addresses||[];c.addresses.push(addr);if(!c.defaultAddressId)c.defaultAddressId=addr.id;syncCustomerLegacyAddress(c);overlay='customerDialog';window.addingAddressFor=null;window.addrDraft=null;formErr='';save();render()});
  document.getElementById('qnName')?.addEventListener('input',e=>{window.newNbDraft=window.newNbDraft||{};window.newNbDraft.name=e.target.value});
  document.getElementById('qnFee')?.addEventListener('input',e=>{window.newNbDraft=window.newNbDraft||{};window.newNbDraft.fee=e.target.value});
  document.getElementById('qnFee')?.addEventListener('input',moneyMaskOnInput);
- document.getElementById('saveQuickNeighborhood')?.addEventListener('click',()=>{let n=qnName.value.trim(),fee=moneyMaskParse(qnFee.value);if(!n){formErr='Informe o nome do bairro.';render();return}if(db.neighborhoods.some(x=>x.name.toLowerCase()===n.toLowerCase())){formErr='Já existe um bairro com esse nome.';render();return}let nb={id:id('n'),name:n,fee:Math.max(0,fee)};db.neighborhoods.push(nb);if(window.neighborhoodDialogTarget==='addr'){window.addrDraft=window.addrDraft||{};window.addrDraft.neighborhood=nb.id;overlay='addCustomerAddress'}else if(window.neighborhoodDialogTarget==='pdvcust'){window.dlgCustDraft=window.dlgCustDraft||{};window.dlgCustDraft.neighborhood=nb.id;overlay='pdvCustomer'}else{window.custDraft=window.custDraft||{};window.custDraft.neighborhood=nb.id;overlay=null}formErr='';window.newNbDraft=null;save();render()});
- document.getElementById('cancelQuickNeighborhood')?.addEventListener('click',()=>{overlay=window.neighborhoodDialogTarget==='addr'?'addCustomerAddress':window.neighborhoodDialogTarget==='pdvcust'?'pdvCustomer':null;formErr='';window.newNbDraft=null;render()});
+ document.getElementById('saveQuickNeighborhood')?.addEventListener('click',()=>{let n=qnName.value.trim(),fee=moneyMaskParse(qnFee.value);if(!n){formErr='Informe o nome do bairro.';render();return}if(db.neighborhoods.some(x=>x.name.toLowerCase()===n.toLowerCase())){formErr='Já existe um bairro com esse nome.';render();return}let nb={id:id('n'),name:n,fee:Math.max(0,fee)};db.neighborhoods.push(nb);if(window.neighborhoodDialogTarget==='addr'){window.addrDraft=window.addrDraft||{};window.addrDraft.neighborhood=nb.id;overlay='addCustomerAddress'}else if(window.neighborhoodDialogTarget==='pdvcust'){window.dlgCustDraft=window.dlgCustDraft||{};window.dlgCustDraft.neighborhood=nb.id;overlay='pdvCustomer'}else{window.custDraft=window.custDraft||{};window.custDraft.neighborhood=nb.id;overlay='customerDialog'}formErr='';window.newNbDraft=null;save();render()});
+ document.getElementById('cancelQuickNeighborhood')?.addEventListener('click',()=>{overlay=window.neighborhoodDialogTarget==='addr'?'addCustomerAddress':window.neighborhoodDialogTarget==='pdvcust'?'pdvCustomer':'customerDialog';formErr='';window.newNbDraft=null;render()});
  document.querySelectorAll('[data-setdefaultaddr]').forEach(e=>e.onclick=()=>{const[cid,aid]=e.dataset.setdefaultaddr.split('|'),c=db.customers.find(x=>x.id===cid);if(c){c.defaultAddressId=aid;syncCustomerLegacyAddress(c);save();render()}});
  document.querySelectorAll('[data-deladdr]').forEach(e=>e.onclick=()=>{const[cid,aid]=e.dataset.deladdr.split('|'),c=db.customers.find(x=>x.id===cid);if(!c)return;if(!confirm('Excluir este endereço?'))return;c.addresses=(c.addresses||[]).filter(a=>a.id!==aid);if(c.defaultAddressId===aid)c.defaultAddressId=c.addresses[0]?.id||'';syncCustomerLegacyAddress(c);save();render()});
  document.querySelectorAll('[data-creditadj]').forEach(e=>e.onclick=()=>{const c=db.customers.find(x=>x.id===e.dataset.creditadj);if(!c)return;const cur=Number(c.credit||0);const raw=prompt(`Crédito atual de ${c.name}: ${money(cur)}\nDigite o valor a ADICIONAR ao crédito (use número negativo para descontar). Ex.: 8 ou -8`,'');if(raw===null)return;const v=Number(String(raw).replace(',','.'));if(!isFinite(v)||v===0)return alert('Informe um número válido, diferente de zero.');c.credit=+Math.max(0,cur+v).toFixed(2);save();render()});
