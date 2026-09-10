@@ -63,7 +63,9 @@
 .pdv-create-pane.is-hidden{display:none}
 .pdv-pane-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
 .pdv-pane-head h2{margin:0}
-.pdv-toggle{white-space:nowrap}
+.pdv-arrow-toggle{width:32px;height:32px;border-radius:50%;background:#2f6fed;color:#fff;border:0;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:800;box-shadow:0 2px 6px #0003;flex-shrink:0;transition:transform .2s,background .15s;line-height:1}
+.pdv-arrow-toggle:hover{background:#2559c9}
+.pdv-arrow-toggle.is-collapsed{transform:rotate(180deg)}
 @media(max-width:760px){.pdv-workspace{flex-direction:column!important}.pdv-create-pane{order:-1;position:static;max-height:none;overflow:visible;max-width:none}}
 </style><style id="paydlg-style">
 .panel-wide{max-width:1100px}
@@ -933,10 +935,11 @@ function renderCaixaNav(){
 function adminNav(){window.navOpen=window.navOpen||{};const reportsOpen=!!window.navOpen.relatorios,cadastroOpen=!!window.navOpen.cadastro;return `<div class="section">Operação</div><button class="tab ${tab==='pedidos'?'active':''}" data-tab="pedidos">🧾 Pedidos / PDV</button>${renderCaixaNav()}<button class="tab ${tab==='entregas'?'active':''}" data-tab="entregas">🛵 Entregas</button><div class="section">Cadastros</div>${[['cardapio','🍔 Produtos'],['estoque','📦 Estoque'],['movimentacao','📑 Movimentação']].map(x=>`<button class="tab ${tab===x[0]?'active':''}" data-tab="${x[0]}">${x[1]}</button>`).join('')}<button class="tab ${tab==='cadastro'?'active':''}" data-tab="cadastro">👤 Cadastro <span class="nav-chevron ${cadastroOpen?'open':''}">▾</span></button>${cadastroOpen?`<div class="report-subnav">${[['clientes','Clientes'],['fornecedores','Fornecedores'],['entregadores','Entregadores'],['adicionais','Adicionais'],['materias','Matérias-primas'],['receitas','Receitas'],['pagamento','Forma de pagamento'],['taxas','Taxas de entrega']].map(x=>`<button class="subtab ${tab==='cadastro'&&(window.cadastroView||'clientes')===x[0]?'active':''}" data-cadastro-view="${x[0]}">${x[1]}</button>`).join('')}</div>`:''}<button class="tab ${(tab==='relatorio-vendas'||tab==='vendas-periodo')?'active':''}" data-tab="relatorio-vendas">📈 Relatório Vendas</button><button class="tab ${tab==='relatorios'?'active':''}" data-tab="relatorios">📊 Relatórios <span class="nav-chevron ${reportsOpen?'open':''}">▾</span></button>${reportsOpen?`<div class="report-subnav">${[['vendas','Vendas'],['vendas_dia','Vendas do dia'],['itens_vendidos','Itens mais vendidos'],['entrega','Entrega'],['estoque_valor','Valor estimado do estoque'],['inadimplentes','Clientes inadimplentes']].map(x=>`<button class="subtab ${tab==='relatorios'&&window.reportView===x[0]?'active':''}" data-report-view="${x[0]}">${x[1]}</button>`).join('')}</div>`:''}<div class="section">Sistema</div><button class="tab ${tab==='config'?'active':''}" data-tab="config">⚙️ Configurações</button>`}
 function renderUnifiedPDV(){
   const hidden=!!window.pdvHideCreate;
+  const active=activeOrdersCount();
   return `<div class="pdv-workspace${hidden?' pdv-only':''}">
     <section class="pdv-orders-pane">
-      <div class="pdv-pane-head"><h2>Pedidos</h2><button class="btn pdv-toggle" id="togglePDVCreate">${hidden?'＋ Mostrar Comanda Rápida':'− Ocultar Comanda Rápida'}</button></div>
-      ${renderOrders()}
+      <div class="pdv-pane-head"><h2>Pedidos <span class="tag">${active} ativos</span></h2><button class="pdv-arrow-toggle${hidden?' is-collapsed':''}" id="togglePDVCreate" aria-label="${hidden?'Mostrar Comanda Rápida':'Ocultar Comanda Rápida'}" title="${hidden?'Mostrar Comanda Rápida':'Ocultar Comanda Rápida'}">›</button></div>
+      ${renderOrders(false)}
     </section>
     ${hidden?'':`<aside class="pdv-create-pane">${renderPdv()}</aside>`}
   </div>`;
@@ -951,11 +954,13 @@ function filteredOrders(){
  if(f.search&&f.search.trim()){const q=f.search.trim().toLowerCase();list=list.filter(o=>o.id.toLowerCase().includes(q)||o.customer.name.toLowerCase().includes(q))}
  return list;
 }
-function renderOrders(){
- const os=db.orders.slice().reverse(), active=os.filter(o=>!['concluido','cancelado'].includes(o.status)).length;
+function activeOrdersCount(){return db.orders.filter(o=>!['concluido','cancelado'].includes(o.status)).length}
+function renderOrders(withTitle){
+ if(withTitle===undefined)withTitle=true;
+ const os=db.orders.slice().reverse(), active=activeOrdersCount();
  const f=window.pdvOrderFilter||(window.pdvOrderFilter={status:'ativos',search:''});
  const list=filteredOrders();
- return `<div class="row" style="margin-bottom:12px"><h2 style="margin:0">Pedidos <span class="tag">${active} ativos</span></h2></div>
+ return `${withTitle?`<div class="row" style="margin-bottom:12px"><h2 style="margin:0">Pedidos <span class="tag">${active} ativos</span></h2></div>`:''}
  <div class="orders-toolbar">
  <select id="ordersFilterStatus">
  <option value="ativos" ${f.status==='ativos'?'selected':''}>Filtros: Ativos</option>
