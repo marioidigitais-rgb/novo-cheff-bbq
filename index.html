@@ -2349,13 +2349,20 @@ function renderRecipeDialog(){
 function renderCadastroPagamento(){
  return `<h2>Cadastro · Forma de pagamento</h2>
  <button class="primary" id="newPaymentBtn" style="width:100%;margin-bottom:16px">➕ Nova forma de pagamento</button>
- <div class="cardbox" style="padding:0">${db.payments.length?db.payments.map(p=>`<div class="payment-method itemrow-clickable" data-clickpayment="${p.id}" style="cursor:pointer">
-  <div class="payment-method-name">${esc(p.name)}${paymentAdjustText(p)?` <span class="tag">${paymentAdjustText(p)}</span>`:''}</div>
-  <div style="display:flex;align-items:center;gap:10px" onclick="event.stopPropagation()">
-   <span class="toggle-status ${p.showClient?'active':''}">${p.showClient?'Visível':'Oculto'}</span>
-   <button type="button" class="toggle-btn ${p.showClient?'active':''}" data-toggleclientvis="${p.id}" title="Clique para ocultar/exibir para o cliente"></button>
-  </div>
- </div>`).join(''):'<div class="itemrow"><span class="meta">Nenhuma forma de pagamento cadastrada.</span></div>'}</div>`;
+ <div class="cardbox" style="padding:0;overflow:auto">
+ <table class="table">
+  <thead><tr>
+   <th>Forma de pagamento</th>
+   <th>Visível para o cliente</th>
+   <th></th>
+  </tr></thead>
+  <tbody>${db.payments.length?db.payments.map(p=>`<tr class="itemrow-clickable" data-clickpayment="${p.id}" style="cursor:pointer">
+   <td><b>${esc(p.name)}</b>${paymentAdjustText(p)?` <span class="tag">${paymentAdjustText(p)}</span>`:''}</td>
+   <td onclick="event.stopPropagation()"><div style="display:flex;align-items:center;gap:10px"><span class="toggle-status ${p.showClient?'active':''}">${p.showClient?'Visível':'Oculto'}</span><button type="button" class="toggle-btn ${p.showClient?'active':''}" data-toggleclientvis="${p.id}" title="Clique para ocultar/exibir para o cliente"></button></div></td>
+   <td style="text-align:center" onclick="event.stopPropagation()"><button type="button" class="icon-btn" data-delpayment="${p.id}" title="Excluir">🗑️</button></td>
+  </tr>`).join(''):'<tr><td colspan="3" class="meta" style="text-align:center;padding:20px">Nenhuma forma de pagamento cadastrada.</td></tr>'}</tbody>
+ </table>
+ </div>`;
 }
 function renderPaymentMethodDialog(){
  const isEdit=!!window.editingPaymentMethod;
@@ -2899,6 +2906,7 @@ document.getElementById('deleteAddonDialog')?.addEventListener('click',()=>{if(!
  document.querySelectorAll('[data-addrecipe]').forEach(e=>e.onclick=(ev)=>{ev.stopPropagation();let pid=e.dataset.addrecipe;let p=db.products.find(x=>x.id===pid);if(!p)return;if(!p.recipe)p.recipe=[];window.editingProduct=pid;window.recipeForProduct=pid;window.editingRecipeIdx=null;window.recipeDraftKind=null;overlay='recipeDialog';save();render()});
  document.getElementById('newPaymentBtn')?.addEventListener('click',()=>{window.editingPaymentMethod=null;window.paymentMethodDraft={adjustType:'acrescimo',showClient:true};overlay='paymentMethodDialog';render()});
  document.querySelectorAll('[data-clickpayment]').forEach(e=>e.onclick=()=>{let p=db.payments.find(x=>x.id===e.dataset.clickpayment);if(!p)return;window.editingPaymentMethod=p.id;const isDiscount=Number(p.fee||0)<0||Number(p.feeFixed||0)<0;window.paymentMethodDraft={name:p.name,adjustType:isDiscount?'desconto':'acrescimo',percent:Math.abs(Number(p.fee||0))||'',fixed:Math.abs(Number(p.feeFixed||0))||'',showClient:p.showClient!==false};overlay='paymentMethodDialog';render()});
+ document.querySelectorAll('[data-delpayment]').forEach(e=>e.onclick=()=>{let p=db.payments.find(x=>x.id===e.dataset.delpayment);if(!p)return;if(!confirm(`Excluir a forma de pagamento "${p.name}"? Essa ação não pode ser desfeita.`))return;db.payments=db.payments.filter(x=>x.id!==p.id);save();render()});
  document.querySelectorAll('[data-toggleclientvis]').forEach(e=>e.onclick=()=>{let p=db.payments.find(x=>x.id===e.dataset.toggleclientvis);p.showClient=!p.showClient;e.classList.toggle('active');const status=e.parentElement.querySelector('.toggle-status');if(status){status.textContent=p.showClient?'Visível':'Oculto';status.classList.toggle('active')}save();render()});
  document.querySelectorAll('[data-pmadjust]').forEach(e=>e.onclick=()=>{window.paymentMethodDraft=window.paymentMethodDraft||{};window.paymentMethodDraft.name=document.getElementById('pmName')?.value;window.paymentMethodDraft.percent=document.getElementById('pmPercent')?.value;window.paymentMethodDraft.fixed=document.getElementById('pmFixed')?.value;window.paymentMethodDraft.showClient=document.getElementById('pmShowClient')?.checked;window.paymentMethodDraft.adjustType=e.dataset.pmadjust;render()});
  document.getElementById('pmFixed')?.addEventListener('input',moneyMaskOnInput);
