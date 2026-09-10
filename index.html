@@ -2401,16 +2401,22 @@ function renderRecipeDialog(){
  const idx=window.editingRecipeIdx;
  const isEdit=Number.isInteger(idx)&&idx>=0&&idx<(p.recipe||[]).length;
  const cur=isEdit?p.recipe[idx]:null;
- const kind=window.recipeDraftKind||(cur&&cur.kind==='pi'?'pi':'materia');
- const piOptions=db.products.filter(x=>piOptionAllowed(p.id,x.id));
+ const curRefProduct=(cur&&cur.kind==='pi')?db.products.find(x=>x.id===cur.productId):null;
+ const defaultKind=!cur?'materia':(cur.kind!=='pi'?'materia':(curRefProduct?.type==='pi'?'pi':'pa'));
+ const kind=window.recipeDraftKind||defaultKind;
+ const piOptions=db.products.filter(x=>x.type==='pi'&&piOptionAllowed(p.id,x.id));
+ const paOptions=db.products.filter(x=>x.type==='pa'&&piOptionAllowed(p.id,x.id));
  return `<div class="overlay show"><div class="panel" style="max-width:500px">
  <div class="head"><h2>${isEdit?'Editar item da receita':'Adicionar item à receita'}</h2><button class="x" id="closeOverlay">×</button></div>
  <div class="field"><label>Tipo de item</label><div class="row" style="gap:8px">
   <button type="button" class="btn ${kind==='materia'?'primary':''}" data-recipekind="materia" style="flex:1">🧪 Matéria-prima</button>
-  <button type="button" class="btn ${kind==='pi'?'primary':''}" data-recipekind="pi" style="flex:1">📦 Produto (combo)</button>
+  <button type="button" class="btn ${kind==='pi'?'primary':''}" data-recipekind="pi" style="flex:1">🧾 Produto Intermediário (PI)</button>
+  <button type="button" class="btn ${kind==='pa'?'primary':''}" data-recipekind="pa" style="flex:1">🍔 Produto / Combo (PA)</button>
  </div></div>
  ${kind==='pi'?
-  `<div class="field"><label>Produto</label><select id="recipeProductSelect">${piOptions.length?piOptions.map(sp=>`<option value="${sp.id}" ${cur&&cur.kind==='pi'&&cur.productId===sp.id?'selected':''}>${sp.type==='pi'?'🧾':'🍔'} ${esc(sp.name)} (${sp.type==='pi'?'PI':'PA'})</option>`).join(''):'<option disabled>Nenhum produto disponível (evite ciclos de receita)</option>'}</select><p class="meta" style="margin-top:6px">Pode ser um Produto Intermediário (PI) ou um produto comum (PA) já vendido separadamente — é assim que se monta um combo.</p></div>`
+  `<div class="field"><label>Produto Intermediário (PI)</label><select id="recipeProductSelect">${piOptions.length?piOptions.map(sp=>`<option value="${sp.id}" ${cur&&cur.kind==='pi'&&cur.productId===sp.id?'selected':''}>${esc(sp.name)}</option>`).join(''):'<option disabled>Nenhum PI disponível (cadastre um produto do tipo PI em Produtos, ou evite ciclos de receita)</option>'}</select></div>`
+  :kind==='pa'?
+  `<div class="field"><label>Produto (PA)</label><select id="recipeProductSelect">${paOptions.length?paOptions.map(sp=>`<option value="${sp.id}" ${cur&&cur.kind==='pi'&&cur.productId===sp.id?'selected':''}>${esc(sp.name)}</option>`).join(''):'<option disabled>Nenhum produto disponível (evite ciclos de receita)</option>'}</select><p class="meta" style="margin-top:6px">Use isto para montar combos com produtos já vendidos separadamente — o estoque dele será descontado normalmente.</p></div>`
   :
   `<div class="field"><label>Matéria-prima</label><select id="recipeIngredientSelect">${db.ingredients.map(ing=>`<option value="${ing.id}" ${cur&&cur.kind!=='pi'&&cur.ingredientId===ing.id?'selected':''}>${esc(ing.name)} (${esc(ing.unit)})</option>`).join('')||'<option disabled>Nenhuma matéria-prima cadastrada</option>'}</select></div>`
  }
@@ -2680,11 +2686,13 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
   let p=db.products.find(x=>x.id===window.recipeForProduct);if(!p)return;
   const idx=window.editingRecipeIdx,isEdit=Number.isInteger(idx)&&p.recipe&&idx>=0&&idx<p.recipe.length;
   const cur=isEdit?p.recipe[idx]:null;
-  const kind=window.recipeDraftKind||(cur&&cur.kind==='pi'?'pi':'materia');
+  const curRefProduct=(cur&&cur.kind==='pi')?db.products.find(x=>x.id===cur.productId):null;
+  const defaultKind=!cur?'materia':(cur.kind!=='pi'?'materia':(curRefProduct?.type==='pi'?'pi':'pa'));
+  const kind=window.recipeDraftKind||defaultKind;
   let qty=Number(document.getElementById('recipeQty')?.value||1);
   if(qty<=0)return;
   let newItem=null;
-  if(kind==='pi'){
+  if(kind==='pi'||kind==='pa'){
    let pid=document.getElementById('recipeProductSelect')?.value;
    if(!pid||!piOptionAllowed(p.id,pid))return;
    newItem={kind:'pi',productId:pid,qty};
