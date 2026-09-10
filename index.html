@@ -905,7 +905,7 @@ function renderAddonChooser(){
  const p=db.products.find(x=>x.id===it.productId);
  const adds=(p?.addons||[]).map(o=>db.addons.find(a=>a.id===o.id)).filter(a=>a&&a.active&&a.stock>0).map(a=>({...a,max:productAddonMax(p,a.id)}));
  return `<div class="product-choice"><h3>${esc(p?.name||it.name)}</h3><div class="meta">Adicionar adicional a este item</div></div>
- <div class="field"><label>Adicionais</label>${adds.length?adds.map(a=>`<div class="addon-choice"><div><b>${esc(a.name)}</b><div class="meta">+ ${money(a.price)} · máximo ${a.max}</div></div><div class="addon-counter"><button type="button" data-addon-minus="${a.id}">−</button><span id="addonQty_${a.id}">0</span><button type="button" data-addon-plus="${a.id}">+</button></div></div>`).join(''):'<div class="meta">Nenhum adicional disponível para este produto.</div>'}</div>
+ <div class="field"><label>Adicionais</label>${adds.length?adds.map(a=>`<div class="addon-choice"><div style="display:flex;align-items:center;gap:8px">${a.photo?`<img src="${a.photo}" style="width:36px;height:36px;object-fit:cover;border-radius:6px;flex-shrink:0">`:''}<div><b>${esc(a.name)}</b><div class="meta">+ ${money(a.price)} · máximo ${a.max}</div></div></div><div class="addon-counter"><button type="button" data-addon-minus="${a.id}">−</button><span id="addonQty_${a.id}">0</span><button type="button" data-addon-plus="${a.id}">+</button></div></div>`).join(''):'<div class="meta">Nenhum adicional disponível para este produto.</div>'}</div>
  <div id="addonErr" class="err">${formErr?esc(formErr):''}</div>
  <button class="primary" id="confirmAddAddon">Adicionar ao item</button>`;
 }
@@ -2053,21 +2053,28 @@ function renderRidersRows(){
 }
 function renderCadastroAdicionais(){
  return `<h2>Cadastro · Adicionais</h2>
- <div class="cardbox">
  <button class="primary" id="newAddonBtn" style="width:100%;margin-bottom:16px">➕ Cadastrar novo adicional</button>
- <h3>Adicionais cadastrados</h3>
- ${db.addons.map(a=>`<div class="addon-item" data-clickaddon="${a.id}">
-  <div class="addon-header">
-   <div class="addon-info">
-    <b class="addon-name">${esc(a.name)}</b>
-    <span class="addon-price">${money(a.price)}</span>
-   </div>
-   <span class="addon-status ${a.active?'status-active':'status-inactive'}">${a.active?'Ativo':'Inativo'}</span>
-  </div>
-  <div class="addon-meta">
-   📦 Estoque: ${a.stock} un. · 🎯 Escolha: ${a.min}–${a.max}
-  </div>
- </div>`).join('')||'<span class="meta">Nenhum adicional cadastrado. Clique em "Cadastrar novo adicional" para começar.</span>'}
+ <div class="cardbox" style="padding:0;overflow:auto">
+ <table class="table addons-table">
+  <thead><tr>
+   <th>Adicional</th>
+   <th>Estoque</th>
+   <th>Mín.</th>
+   <th>Máx.</th>
+   <th>Valor</th>
+   <th>Ativo</th>
+   <th></th>
+  </tr></thead>
+  <tbody>${db.addons.length?db.addons.map(a=>`<tr class="itemrow-clickable" data-clickaddon="${a.id}" style="cursor:pointer">
+   <td>${a.photo?`<img src="${a.photo}" style="width:32px;height:32px;object-fit:cover;border-radius:6px;margin-right:8px;vertical-align:middle">`:''}<b>${esc(a.name)}</b></td>
+   <td>${a.stock}</td>
+   <td>${a.min}</td>
+   <td>${a.max}</td>
+   <td>${money(a.price)}</td>
+   <td><button type="button" class="toggle-btn ${a.active?'active':''}" data-toggleaddonstatus="${a.id}" onclick="event.stopPropagation()" aria-label="Ativar ou desativar adicional"></button></td>
+   <td><button type="button" class="icon-btn" data-deladdonlist="${a.id}" onclick="event.stopPropagation()" title="Excluir">🗑️</button></td>
+  </tr>`).join(''):'<tr><td colspan="7" class="meta" style="text-align:center;padding:20px">Nenhum adicional cadastrado. Clique em "Cadastrar novo adicional" para começar.</td></tr>'}</tbody>
+ </table>
  </div>`;
 }
 function renderAddonDialog(){
@@ -2085,6 +2092,7 @@ function renderAddonDialog(){
   <div class="field"><label>Mínimo de escolha</label><input autocomplete="off" id="dialogAdMin" type="number" min="0" value="${d.min!=null?d.min:0}" placeholder="0"></div>
   <div class="field"><label>Máximo de escolha</label><input autocomplete="off" id="dialogAdMax" type="number" min="1" value="${d.max||1}" placeholder="1"></div>
  </div>
+ <div class="field"><label>Foto do adicional (opcional)</label>${a&&a.photo?`<div style="margin-bottom:6px"><img src="${a.photo}" style="max-width:100px;border-radius:8px;display:block"></div>`:''}<input type="file" id="dialogAdPhoto" accept="image/*"><div id="dialogAdPhotoPreview" style="margin-top:6px"></div>${a&&a.photo?`<button type="button" class="ghost" id="removeAddonPhoto">Remover foto</button>`:''}</div>
  <div class="row" style="margin-top:12px">
   <button class="primary" style="flex:1" id="saveAddonDialog">${isEdit?'Atualizar adicional':'Cadastrar adicional'}</button>
  </div>
@@ -2785,10 +2793,14 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
   let n=db.neighborhoods.find(x=>x.id===e.target.value);let el=document.getElementById('custFee');if(el)el.textContent=n?`Taxa de entrega: ${money(n.fee)}`:'Selecione o bairro para visualizar a taxa de entrega.'
  });
  ['custName','custPhone','custStreet','custNumber','custComplement','custReference'].forEach(fid=>document.getElementById(fid)?.addEventListener('input',e=>{window.custDraft=window.custDraft||{};const m={custName:'name',custPhone:'phone',custStreet:'street',custNumber:'number',custComplement:'complement',custReference:'reference'};window.custDraft[m[fid]]=e.target.value}));
- document.getElementById('newAddonBtn')?.addEventListener('click',()=>{window.editingAddon=null;window.addonDraft={};overlay='addonDialog';render()});
-document.querySelectorAll('[data-clickaddon]').forEach(e=>e.onclick=()=>{let aid=e.dataset.clickaddon;let a=db.addons.find(x=>x.id===aid);if(!a)return;window.editingAddon=aid;window.addonDraft={name:a.name,price:a.price,stock:a.stock,min:a.min,max:a.max};overlay='addonDialog';render()});
+ document.getElementById('newAddonBtn')?.addEventListener('click',()=>{window.editingAddon=null;window.addonDraft={};window.addonPhotoData=null;overlay='addonDialog';render()});
+document.querySelectorAll('[data-clickaddon]').forEach(e=>e.onclick=()=>{let aid=e.dataset.clickaddon;let a=db.addons.find(x=>x.id===aid);if(!a)return;window.editingAddon=aid;window.addonDraft={name:a.name,price:a.price,stock:a.stock,min:a.min,max:a.max};window.addonPhotoData=null;overlay='addonDialog';render()});
+document.querySelectorAll('[data-toggleaddonstatus]').forEach(e=>e.onclick=()=>{let a=db.addons.find(x=>x.id===e.dataset.toggleaddonstatus);if(!a)return;a.active=!a.active;save();render()});
+document.querySelectorAll('[data-deladdonlist]').forEach(e=>e.onclick=()=>{let aid=e.dataset.deladdonlist;if(!confirm('Excluir este adicional? Produtos que o usam também serão afetados.'))return;db.addons=db.addons.filter(x=>x.id!==aid);db.products.forEach(p=>{p.addons=(p.addons||[]).filter(o=>o.id!==aid)});save();render()});
+document.getElementById('dialogAdPhoto')?.addEventListener('change',(e)=>{const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{window.addonPhotoData=reader.result;const prev=document.getElementById('dialogAdPhotoPreview');if(prev)prev.innerHTML=`<img src="${reader.result}" style="max-width:100px;border-radius:8px;display:block">`};reader.readAsDataURL(file)});
+document.getElementById('removeAddonPhoto')?.addEventListener('click',()=>{let a=db.addons.find(x=>x.id===window.editingAddon);if(a)a.photo=null;window.addonPhotoData=null;save();render()});
 document.getElementById('dialogAdPrice')?.addEventListener('input',moneyMaskOnInput);
-document.getElementById('saveAddonDialog')?.addEventListener('click',()=>{let n=document.getElementById('dialogAdName').value.trim(),price=moneyMaskParse(document.getElementById('dialogAdPrice').value),stock=Math.max(0,Number(document.getElementById('dialogAdStock').value||0)),min=Math.max(0,Number(document.getElementById('dialogAdMin').value||0)),max=Math.max(min,Number(document.getElementById('dialogAdMax').value||1));if(!n||price<0){alert('Informe nome e preço válidos.');return}if(window.editingAddon){let a=db.addons.find(x=>x.id===window.editingAddon);if(!a)return;a.name=n;a.price=price;a.stock=stock;a.min=min;a.max=max;window.editingAddon=null}else{db.addons.push({id:id('a'),name:n,price,stock,active:true,min,max})}window.addonDraft={};overlay=null;save();render()});
+document.getElementById('saveAddonDialog')?.addEventListener('click',()=>{let n=document.getElementById('dialogAdName').value.trim(),price=moneyMaskParse(document.getElementById('dialogAdPrice').value),stock=Math.max(0,Number(document.getElementById('dialogAdStock').value||0)),min=Math.max(0,Number(document.getElementById('dialogAdMin').value||0)),max=Math.max(min,Number(document.getElementById('dialogAdMax').value||1));if(!n||price<0){alert('Informe nome e preço válidos.');return}if(window.editingAddon){let a=db.addons.find(x=>x.id===window.editingAddon);if(!a)return;a.name=n;a.price=price;a.stock=stock;a.min=min;a.max=max;if(window.addonPhotoData)a.photo=window.addonPhotoData;window.editingAddon=null}else{db.addons.push({id:id('a'),name:n,price,stock,active:true,min,max,photo:window.addonPhotoData||null})}window.addonDraft={};window.addonPhotoData=null;overlay=null;save();render()});
 document.getElementById('deleteAddonDialog')?.addEventListener('click',()=>{if(!window.editingAddon)return;let aid=window.editingAddon;if(!confirm('Excluir este adicional? Produtos que o usam também serão afetados.'))return;db.addons=db.addons.filter(x=>x.id!==aid);db.products.forEach(p=>{p.addons=(p.addons||[]).filter(o=>o.id!==aid)});window.editingAddon=null;window.addonDraft={};overlay=null;save();render()});
  document.getElementById('dialogSupCnpj')?.addEventListener('input',e=>{e.target.value=maskDocBR(e.target.value)});
  document.getElementById('dialogSupPhone')?.addEventListener('input',e=>{e.target.value=maskPhoneBR(e.target.value)});
