@@ -318,6 +318,8 @@ async function loadMenuFromSupabase(){
    sb.from('settings').select('*').eq('id',1).maybeSingle()
   ]);
   if(catsR.error)throw catsR.error;
+  if(addonsR.error)throw addonsR.error;
+  if(payR.error)throw payR.error;
   if(prodR.error)throw prodR.error;
   if(nbR.error)throw nbR.error;
   db.categories=(catsR.data||[]).map(c=>({id:c.id,name:c.name,active:true}));
@@ -337,6 +339,26 @@ async function loadMenuFromSupabase(){
   db.addons=(addonsR.data||[]).map(a=>({id:a.id,name:a.name,price:Number(a.price),stock:Number(a.stock),active:a.active,min:a.min_qty,max:a.max_qty}));
   db.neighborhoods=(nbR.data||[]).map(n=>({id:n.id,name:n.name,fee:Number(n.fee),municipio:n.municipio||'',active:n.active!==false}));
   db.payments=(payR.data||[]).map(p=>({id:p.id,name:p.name,fee:Number(p.fee),active:p.active,showClient:p.show_client}));
+  try{
+   // Busca a foto dos adicionais à parte: se a coluna "photo" ainda não
+   // existir na tabela addons do Supabase, essa consulta falha sozinha
+   // sem derrubar o restante do carregamento do cardápio.
+   const addonPhotoR=await sb.from('addons').select('id,photo');
+   if(!addonPhotoR.error&&addonPhotoR.data){
+    const photoMap={};addonPhotoR.data.forEach(x=>{photoMap[x.id]=x.photo});
+    db.addons.forEach(a=>{if(photoMap[a.id]!==undefined)a.photo=photoMap[a.id]||null});
+   }
+  }catch(e){}
+  try{
+   // Busca o valor fixo (R$) das formas de pagamento à parte: se a coluna
+   // "fee_fixed" ainda não existir na tabela payment_methods do Supabase,
+   // essa consulta falha sozinha sem derrubar o restante do carregamento.
+   const payFixedR=await sb.from('payment_methods').select('id,fee_fixed');
+   if(!payFixedR.error&&payFixedR.data){
+    const fixedMap={};payFixedR.data.forEach(x=>{fixedMap[x.id]=x.fee_fixed});
+    db.payments.forEach(p=>{if(fixedMap[p.id]!==undefined)p.feeFixed=Number(fixedMap[p.id])||0});
+   }
+  }catch(e){}
   const hoursObj={};(hoursR.data||[]).forEach(h=>{hoursObj[h.weekday]={open:(h.open_time||'').slice(0,5),close:(h.close_time||'').slice(0,5),active:h.active}});
   if(Object.keys(hoursObj).length)db.hours=hoursObj;
   if((tablesR.data||[]).length)db.tables=tablesR.data.map(t=>t.name);
@@ -460,8 +482,14 @@ async function syncCategoriesToSupabase(){
 }
 async function syncAddonsToSupabase(){
  if(__snapEquals('addons',db.addons))return;
- const rows=db.addons.map(a=>({id:a.id,name:a.name,price:a.price,stock:a.stock,active:a.active,min_qty:a.min,max_qty:a.max}));
- await __upsertAndPrune('addons',rows);
+ const rows=db.addons.map(a=>({id:a.id,name:a.name,price:a.price,stock:a.stock,active:a.active,min_qty:a.min,max_qty:a.max,photo:a.photo||null}));
+ try{
+  await __upsertAndPrune('addons',rows);
+ }catch(e){
+  // Se a coluna "photo" ainda não existir na tabela addons do Supabase,
+  // tenta de novo sem ela, pra não travar a sincronização do restante.
+  await __upsertAndPrune('addons',rows.map(({photo,...r})=>r));
+ }
  __snapCommit('addons',db.addons);
 }
 async function syncProductsToSupabase(){
@@ -485,8 +513,14 @@ async function syncNeighborhoodsToSupabase(){
 }
 async function syncPaymentsToSupabase(){
  if(__snapEquals('payments',db.payments))return;
- const rows=db.payments.map(p=>({id:p.id,name:p.name,fee:p.fee,active:p.active,show_client:p.showClient}));
- await __upsertAndPrune('payment_methods',rows);
+ const rows=db.payments.map(p=>({id:p.id,name:p.name,fee:p.fee,active:p.active,show_client:p.showClient,fee_fixed:Number(p.feeFixed)||0}));
+ try{
+  await __upsertAndPrune('payment_methods',rows);
+ }catch(e){
+  // Se a coluna "fee_fixed" ainda não existir na tabela payment_methods do
+  // Supabase, tenta de novo sem ela, pra não travar a sincronização do restante.
+  await __upsertAndPrune('payment_methods',rows.map(({fee_fixed,...r})=>r));
+ }
  __snapCommit('payments',db.payments);
 }
 async function syncHoursToSupabase(){
@@ -570,6 +604,7 @@ function startSupabaseRealtime(){
 }
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=n=>'R$ '+Number(n||0).toFixed(2).replace('.',',');
+function paymentAdjustText(p){const parts=[],fee=Number(p?.fee||0),fixed=Number(p?.feeFixed||0);if(fee)parts.push(`${fee>0?'+':'-'}${Math.abs(fee)}%`);if(fixed)parts.push(`${fixed>0?'+':'-'}${money(Math.abs(fixed))}`);return parts.join(' ')}
 function moneyMaskFormat(val){let cents;if(typeof val==='number'){cents=Math.round(val*100)}else{cents=parseInt(String(val||'').replace(/\D/g,'')||'0',10)}if(!Number.isFinite(cents))cents=0;return (cents/100).toFixed(2).replace('.',',')}
 function moneyMaskParse(str){if(str==null||str==='')return 0;if(typeof str==='number')return str;const n=parseFloat(String(str).replace(/[^\d,-]/g,'').replace(',','.'));return Number.isFinite(n)?n:0}
 function moneyMaskOnInput(e){const digits=String(e.target.value||'').replace(/\D/g,'');const start=e.target.selectionStart;e.target.value=digits?moneyMaskFormat(digits):'';try{e.target.setSelectionRange(e.target.value.length,e.target.value.length)}catch(err){}}
@@ -742,7 +777,7 @@ setInterval(checkNewOrders,4000);
 window.addEventListener('storage',e=>{if(e.key===KEY)checkNewOrders()});
 function save(){localStorage.setItem(KEY,JSON.stringify(db));window.lastSeenOrderCount=db.orders.length;scheduleSupabaseSync()}
 async function load(){try{db=JSON.parse(localStorage.getItem(KEY))||structuredClone(DEFAULT)}catch(e){db=structuredClone(DEFAULT)}normalize();window.lastSeenOrderCount=db.orders.length;window.menuLoading=(route==='client');render();await loadMenuFromSupabase();normalize();if(window.supabaseMenuLoaded)__seedSyncSnapshot();window.menuLoading=false;render();startSupabaseRealtime()}
-function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.cancelamento??=DEFAULT.settings.messages.cancelamento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.categories??=structuredClone(DEFAULT.categories);db.categories.forEach(c=>{c.active=c.active!==false});db.products??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.riders.forEach(r=>{r.active=r.active!==false;r.createdAt=r.createdAt||new Date().toISOString()});db.orders??=[];db.ingredients??=[];db.cash??={open:false,initial:0,movements:[]};db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.type=p.type==='pi'?'pi':'pa';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true});db.payments.forEach(p=>p.showClient??=true);
+function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.cancelamento??=DEFAULT.settings.messages.cancelamento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.categories??=structuredClone(DEFAULT.categories);db.categories.forEach(c=>{c.active=c.active!==false});db.products??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.riders.forEach(r=>{r.active=r.active!==false;r.createdAt=r.createdAt||new Date().toISOString()});db.orders??=[];db.ingredients??=[];db.cash??={open:false,initial:0,movements:[]};db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.type=p.type==='pi'?'pi':'pa';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true});db.payments.forEach(p=>{p.showClient??=true;p.fee=Number(p.fee)||0;p.feeFixed=Number(p.feeFixed)||0});
  db.customerSeq??=0;
  db.customers.forEach(c=>{
   c.addresses??=[];
@@ -830,7 +865,7 @@ function labelStatus(s){return ({recebido:'Recebido',preparando:'Em preparo',agu
 function productAvailable(p){return !!(p&&p.active&&getProductStock(p)>0)}
 function cartSubtotal(){return cart.reduce((s,x)=>s+x.price*x.qty+(x.addons||[]).reduce((a,b)=>a+b.price*b.qty*x.qty,0),0)}
 function deliveryFee(){const d=window.checkoutDraft||{};return d.delivery==='entrega'?(db.neighborhoods.find(n=>n.id===d.neighborhood)?.fee||0):0}
-function paymentTotal(base,pid){const p=db.payments.find(x=>x.id===pid);return base+(base*(p?.fee||0)/100)}
+function paymentTotal(base,pid){const p=db.payments.find(x=>x.id===pid);return Math.max(0,base+(base*(p?.fee||0)/100)+Number(p?.feeFixed||0))}
 function render(){
  const active=document.activeElement;
  let focusInfo=null;
@@ -880,6 +915,7 @@ function renderOverlay(){
  if(overlay==='addCustomerAddress')return renderAddCustomerAddress();
  if(overlay==='addNeighborhoodQuick')return renderAddNeighborhoodQuick();
  if(overlay==='addonDialog')return renderAddonDialog();
+ if(overlay==='paymentMethodDialog')return renderPaymentMethodDialog();
  if(overlay==='neighborhoodDialog')return renderNeighborhoodDialog();
  if(overlay==='supplierDialog')return renderSupplierDialog();
  if(overlay==='newRider')return renderNewRiderDialog();
@@ -923,7 +959,7 @@ function renderCheckout(){
  <div class="field"><label>WhatsApp obrigatório</label>${phoneInputHtml("fPhone",d.phone,true)}<div class="meta">O sistema valida DDD e formato brasileiro. A existência real da conta WhatsApp só pode ser confirmada por uma API oficial/serviço externo.</div></div>
  <div class="field"><label>Modo do pedido</label><div class="chips">${[['retirada','Retirada'],['entrega','Entrega'],['local','Consumir no local']].map(([v,n])=>`<button class="chip ${d.delivery===v?'active':''}" data-delivery="${v}">${n}</button>`).join('')}</div></div>
  ${d.delivery==='entrega'?(savedAddrs.length?`<div class="field"><label>Endereço de entrega</label><div class="chips">${savedAddrs.map(a=>`<button class="chip ${d.selectedAddressId===a.id?'active':''}" data-useaddr="${a.id}">${esc(a.label||a.street)}</button>`).join('')}<button class="chip ${d.selectedAddressId==='novo'?'active':''}" data-useaddr="novo">+ Novo endereço</button></div></div>`:'')+(d.selectedAddressId==='novo'?`<div class="formgrid"><div class="field"><label>Endereço</label><input autocomplete="off" id="fAddress" value="${esc(d.address)}"></div><div class="field"><label>Número</label><input autocomplete="off" id="fNumber" value="${esc(d.number)}"></div></div><div class="formgrid"><div class="field"><label>Bairro</label><select id="fNeighborhood"><option value="">Selecione</option>${activeNeighborhoods(d.neighborhood).map(n=>`<option value="${n.id}" ${d.neighborhood===n.id?'selected':''}>${esc(n.name)} · ${money(n.fee)}</option>`).join('')}</select></div><div class="field"><label>Complemento</label><input autocomplete="off" id="fComplement" value="${esc(d.complement)}"></div></div><label class="chip"><input type="checkbox" id="fSaveAddr" ${d.saveAddress?'checked':''}> Salvar este endereço para próximos pedidos</label>`:`<div class="meta" style="margin:8px 0">${(()=>{let a=savedAddrs.find(x=>x.id===d.selectedAddressId);return a?`${esc(a.street)}, ${esc(a.number)}${a.complement?' · '+esc(a.complement):''} · ${esc(a.neighborhoodName)}`:''})()}</div>`):''}
- <div class="field"><label>Pagamento</label><div class="chips">${activePays.map(p=>`<button class="chip ${d.payment===p.id?'active':''}" data-payment="${p.id}">${esc(p.name)}${p.fee?` +${p.fee}%`:''}</button>`).join('')}</div></div>
+ <div class="field"><label>Pagamento</label><div class="chips">${activePays.map(p=>`<button class="chip ${d.payment===p.id?'active':''}" data-payment="${p.id}">${esc(p.name)}${paymentAdjustText(p)?` ${paymentAdjustText(p)}`:''}</button>`).join('')}</div></div>
  ${d.payment==='cash'?`<div class="field"><label>Troco para (opcional)</label><input autocomplete="off" id="fChangeFor" type="text" inputmode="decimal" value="${d.changeFor?moneyMaskFormat(Number(d.changeFor)||0):''}" placeholder="Ex.: 50,00"></div>`:''}<div class="field"><label>Observações</label><textarea id="fNotes">${esc(d.notes)}</textarea></div>${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  ${creditAvail>0?`<label class="chip" style="display:flex;align-items:center;gap:6px;margin:10px 0"><input type="checkbox" id="fUseCredit" ${d.useCredit?'checked':''}> Usar meu crédito disponível (${money(creditAvail)})</label>`:''}
  <div class="row"><span>Subtotal</span><b>${money(cartSubtotal())}</b></div>${fee?`<div class="row"><span>Entrega</span><b>${money(fee)}</b></div>`:''}${creditApplied>0?`<div class="row"><span>Crédito aplicado</span><b style="color:var(--ok)">-${money(creditApplied)}</b></div>`:''}<div class="row" style="margin-top:8px"><span>Total</span><b class="price">${money(total)}</b></div>
@@ -1204,8 +1240,8 @@ function recalcPdv(){
  const preCredit=Math.max(0,base+fee+Number(d.surcharge||0)-Number(d.discount||0));
  const creditApplied=d.useCredit&&creditAvail>0?+Math.min(creditAvail,preCredit).toFixed(2):0;
  const gross=Math.max(0,preCredit-creditApplied);
- if((d.payments||[]).length===1){let pay=db.payments.find(p=>p.id===d.payments[0].payment),feePct=(pay?.fee||0)/100;d.payments[0].amount=feePct<1?+(gross/(1-feePct)).toFixed(2):gross}
- let sum=0,fees=0;(d.payments||[]).forEach(line=>{let pay=db.payments.find(p=>p.id===line.payment),amt=Number(line.amount||0);sum+=amt;fees+=amt*(pay?.fee||0)/100});
+ if((d.payments||[]).length===1){let pay=db.payments.find(p=>p.id===d.payments[0].payment),feePct=(pay?.fee||0)/100,fixedFee=Number(pay?.feeFixed||0);d.payments[0].amount=feePct<1?Math.max(0,+((gross+fixedFee)/(1-feePct)).toFixed(2)):Math.max(0,+(gross+fixedFee).toFixed(2))}
+ let sum=0,fees=0;(d.payments||[]).forEach(line=>{let pay=db.payments.find(p=>p.id===line.payment),amt=Number(line.amount||0);sum+=amt;fees+=amt*(pay?.fee||0)/100+(amt>0?Number(pay?.feeFixed||0):0)});
  const total=gross+fees,change=Math.max(0,Number(d.tendered||0)-total);d._paymentTotal=total;d._fees=fees;d._deliveryFee=fee;d._sum=sum;d._change=change;d._creditApplied=creditApplied;
  const sm=document.getElementById('posPaymentSummary');if(sm)sm.textContent=`Produtos ${money(base)} · entrega ${money(fee)} · taxas ${money(fees)} · total ${money(total)} · informado ${money(sum)}${sum<total?' · falta '+money(total-sum):''}`;
  const ch=document.getElementById('posChange');if(ch)ch.value=money(change);return {base,fee,gross,total,sum,fees,change,creditApplied};
@@ -1253,7 +1289,7 @@ function renderPdv(){
  </div>
  ${d.mode==='local'?`<div class="field"><label>Mesa</label><select id="posTable"><option value="">Selecione a mesa</option>${db.tables.map(t=>`<option value="${esc(t)}" ${d.table===t?'selected':''}>${esc(t)}</option>`).join('')}</select></div>`:''}
  ${d.mode==='entrega'?`<div class="formgrid"><div class="field"><label>Rua / avenida</label><input autocomplete="off" id="posStreet" value="${esc(d.address||'')}"></div><div class="field"><label>Número</label><input autocomplete="off" id="posNumber" value="${esc(d.number||'')}"></div><div class="field"><label>Complemento</label><input autocomplete="off" id="posComplement" value="${esc(d.complement||'')}"></div><div class="field"><label>Bairro</label><select id="posNeighborhood"><option value="">Selecione</option>${activeNeighborhoods(d.neighborhood).map(n=>`<option value="${n.id}" ${d.neighborhood===n.id?'selected':''}>${esc(n.name)} · ${money(n.fee)}</option>`).join('')}</select><div class="meta" id="posDeliveryFee">Taxa: ${money(db.neighborhoods.find(n=>n.id===d.neighborhood)?.fee||0)}</div></div></div>`:''}
- <div class="field" style="margin-top:10px"><label>Forma de Pagamento</label><select id="posPaymentSimple"><option value="" ${!d.payments[0].payment?'selected':''}>Selecione...</option>${pays.map(x=>`<option value="${x.id}" ${d.payments[0].payment===x.id?'selected':''}>${esc(x.name)}${x.fee?` · ${x.fee}%`:''}</option>`).join('')}</select></div>
+ <div class="field" style="margin-top:10px"><label>Forma de Pagamento</label><select id="posPaymentSimple"><option value="" ${!d.payments[0].payment?'selected':''}>Selecione...</option>${pays.map(x=>`<option value="${x.id}" ${d.payments[0].payment===x.id?'selected':''}>${esc(x.name)}${paymentAdjustText(x)?` · ${paymentAdjustText(x)}`:''}</option>`).join('')}</select></div>
  <label class="pix-row"><input type="checkbox" id="posPixLink" ${d.pixLink?'checked':''}> Gerar link de pagamento (PIX) <span title="Envie um link de pagamento PIX para o cliente">ⓘ</span><button type="button" class="btn" id="posPixConnect">Conectar</button></label>
  <div class="formgrid" style="margin-top:10px"><div class="field"><label>Acréscimo</label><input autocomplete="off" id="posSurcharge" type="text" inputmode="decimal" value="${moneyMaskFormat(Number(d.surcharge||0))}"></div><div class="field"><label>Desconto</label><input autocomplete="off" id="posDiscount" type="text" inputmode="decimal" value="${moneyMaskFormat(Number(d.discount||0))}"></div></div>
  ${d.payments[0].payment==='cash'?`<div class="formgrid"><div class="field"><label>Cliente entregou (dinheiro)</label><input autocomplete="off" id="posTendered" type="text" inputmode="decimal" value="${d.tendered?moneyMaskFormat(Number(d.tendered)):''}" placeholder="Opcional"></div><div class="field"><label>Troco</label><input autocomplete="off" id="posChange" readonly></div></div>`:''}<div id="posPaymentSummary" class="meta"></div>
@@ -1261,7 +1297,7 @@ function renderPdv(){
  <details class="pdv-more-options">
  <summary>Mais opções · pagamento dividido</summary>
  <div class="settings-content">
- <div id="posPayments">${d.payments.map((line,i)=>`<div class="grid2 payline" data-payline="${i}" style="margin-bottom:7px"><select data-pospay="${i}">${pays.map(x=>`<option value="${x.id}" ${line.payment===x.id?'selected':''}>${esc(x.name)}${x.fee?` · ${x.fee}%`:''}</option>`).join('')}</select><input autocomplete="off" data-posamount="${i}" type="text" inputmode="decimal" value="${line.amount?moneyMaskFormat(Number(line.amount)):''}" placeholder="Valor"></div>`).join('')}</div><button type="button" class="btn" id="addPosPayment">+ Adicionar forma de pagamento</button>
+ <div id="posPayments">${d.payments.map((line,i)=>`<div class="grid2 payline" data-payline="${i}" style="margin-bottom:7px"><select data-pospay="${i}">${pays.map(x=>`<option value="${x.id}" ${line.payment===x.id?'selected':''}>${esc(x.name)}${paymentAdjustText(x)?` · ${paymentAdjustText(x)}`:''}</option>`).join('')}</select><input autocomplete="off" data-posamount="${i}" type="text" inputmode="decimal" value="${line.amount?moneyMaskFormat(Number(line.amount)):''}" placeholder="Valor"></div>`).join('')}</div><button type="button" class="btn" id="addPosPayment">+ Adicionar forma de pagamento</button>
  </div></details>
  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  <div class="pdv-footer-total"><div><span class="meta">TOTAL PEDIDO</span><br><b class="price" id="pdvTotal">${money(totalDisplay)}</b>${creditAppliedDisplay>0?`<br><span class="meta" style="color:var(--ok)">Crédito aplicado: -${money(creditAppliedDisplay)}</span>`:''}</div><div class="pdv-footer-actions"><button type="button" class="ghost" id="cancelPdv">Cancelar</button><button type="button" class="primary" id="savePdv">💾 Salvar</button></div></div>
@@ -2311,7 +2347,36 @@ function renderRecipeDialog(){
  </div></div>`;
 }
 function renderCadastroPagamento(){
- return `<h2>Cadastro · Forma de pagamento</h2><div class="cardbox"><h3>Formas de pagamento e taxas</h3><div class="grid2"><input autocomplete="off" id="payName" placeholder="Nome da forma"><input autocomplete="off" id="payFee" type="number" step=".1" placeholder="Taxa %"></div><label class="chip"><input type="checkbox" id="payClient" checked> Exibir para cliente</label><button class="primary" id="addPayment">Cadastrar forma de pagamento</button><div style="margin-top:16px">${db.payments.map(p=>`<div class="payment-method"><div class="payment-method-name">${esc(p.name)}</div><div class="payment-method-input"><input autocomplete="off" data-feepay="${p.id}" type="number" step=".1" value="${p.fee}" placeholder="Taxa %"><button class="btn" data-togglepayclient="${p.id}">${p.showClient?'Ocultar':'Exibir'} para cliente</button></div><div class="payment-method-label">Ocultar do cliente</div><div style="display:flex;align-items:center;gap:10px"><button class="toggle-btn ${p.showClient?'active':''}" data-toggleclientvis="${p.id}" title="Clique para ocultar/exibir para o cliente"></button><span class="toggle-status ${p.showClient?'active':''}" data-statusclientvis="${p.id}">${p.showClient?'Visível':'Oculto'}</span></div></div>`).join('')}</div>`;
+ return `<h2>Cadastro · Forma de pagamento</h2>
+ <button class="primary" id="newPaymentBtn" style="width:100%;margin-bottom:16px">➕ Nova forma de pagamento</button>
+ <div class="cardbox" style="padding:0">${db.payments.length?db.payments.map(p=>`<div class="payment-method itemrow-clickable" data-clickpayment="${p.id}" style="cursor:pointer">
+  <div class="payment-method-name">${esc(p.name)}${paymentAdjustText(p)?` <span class="tag">${paymentAdjustText(p)}</span>`:''}</div>
+  <div style="display:flex;align-items:center;gap:10px" onclick="event.stopPropagation()">
+   <span class="toggle-status ${p.showClient?'active':''}">${p.showClient?'Visível':'Oculto'}</span>
+   <button type="button" class="toggle-btn ${p.showClient?'active':''}" data-toggleclientvis="${p.id}" title="Clique para ocultar/exibir para o cliente"></button>
+  </div>
+ </div>`).join(''):'<div class="itemrow"><span class="meta">Nenhuma forma de pagamento cadastrada.</span></div>'}</div>`;
+}
+function renderPaymentMethodDialog(){
+ const isEdit=!!window.editingPaymentMethod;
+ const d=window.paymentMethodDraft||(window.paymentMethodDraft={adjustType:'acrescimo'});
+ return `<div class="overlay show"><div class="panel" style="max-width:500px">
+ <div class="head"><h2>${isEdit?'Editar forma de pagamento':'Nova forma de pagamento'}</h2><button class="x" id="closeOverlay">×</button></div>
+ <div class="field"><label>Nome</label><input autocomplete="off" id="pmName" value="${esc(d.name||'')}" placeholder="Ex.: Pix, Dinheiro, Cartão de crédito"></div>
+ <div class="field"><label>Tipo de ajuste</label><div class="row" style="gap:8px">
+  <button type="button" class="btn ${d.adjustType!=='desconto'?'primary':''}" data-pmadjust="acrescimo" style="flex:1">➕ Acréscimo</button>
+  <button type="button" class="btn ${d.adjustType==='desconto'?'primary':''}" data-pmadjust="desconto" style="flex:1">➖ Desconto</button>
+ </div><p class="meta" style="margin-top:6px">Define se os valores abaixo somam ou descontam do total quando essa forma de pagamento é usada.</p></div>
+ <div class="grid2">
+  <div class="field"><label>Valor em %</label><input autocomplete="off" id="pmPercent" type="number" step=".01" min="0" value="${d.percent||''}" placeholder="0,00"></div>
+  <div class="field"><label>Valor fixo em R$</label><input autocomplete="off" id="pmFixed" type="text" inputmode="decimal" value="${d.fixed?moneyMaskFormat(Number(d.fixed)||0):''}" placeholder="0,00"></div>
+ </div>
+ <label class="chip"><input type="checkbox" id="pmShowClient" ${d.showClient!==false?'checked':''}> Exibir para cliente</label>
+ <div class="row" style="margin-top:12px">
+  <button class="primary" style="flex:1" id="savePaymentMethod">${isEdit?'Salvar alterações':'Cadastrar forma de pagamento'}</button>
+ </div>
+ ${isEdit?`<button class="danger" style="width:100%;margin-top:8px" id="deletePaymentMethod">🗑️ Excluir esta forma de pagamento</button>`:''}
+ </div></div>`;
 }
 function renderCadastroTaxas(){
  const rows=sortedNeighborhoods();
@@ -2832,9 +2897,13 @@ document.getElementById('deleteAddonDialog')?.addEventListener('click',()=>{if(!
  document.getElementById('deleteMateriaDialog')?.addEventListener('click',()=>{if(!window.editingMateria)return;let mid=window.editingMateria;if(!confirm('Excluir esta matéria-prima? Receitas que a usam também serão afetadas.'))return;db.ingredients=db.ingredients.filter(x=>x.id!==mid);db.products.forEach(p=>{p.recipe=(p.recipe||[]).filter(r=>r.ingredientId!==mid)});window.editingMateria=null;window.materiaDraft={};overlay=null;save();render()});
  document.querySelectorAll('[data-editrecipe]').forEach(e=>e.onclick=(ev)=>{if(ev.target.closest('button'))return;let pid=e.dataset.editrecipe;let p=db.products.find(x=>x.id===pid);if(!p)return;window.editingProduct=pid;window.recipeForProduct=pid;overlay='editProduct';render()});
  document.querySelectorAll('[data-addrecipe]').forEach(e=>e.onclick=(ev)=>{ev.stopPropagation();let pid=e.dataset.addrecipe;let p=db.products.find(x=>x.id===pid);if(!p)return;if(!p.recipe)p.recipe=[];window.editingProduct=pid;window.recipeForProduct=pid;window.editingRecipeIdx=null;window.recipeDraftKind=null;overlay='recipeDialog';save();render()});
- document.getElementById('addPayment')?.addEventListener('click',()=>{let n=payName.value.trim(),fee=Math.max(0,Number(payFee.value||0));if(!n)return alert('Informe o nome da forma de pagamento.');db.payments.push({id:id('pay'),name:n,fee,active:true,showClient:document.getElementById('payClient')?.checked??true});save();render()});
- document.querySelectorAll('[data-togglepayclient]').forEach(e=>e.onclick=()=>{let p=db.payments.find(x=>x.id===e.dataset.togglepayclient);p.showClient=!p.showClient;save();render()});
- document.querySelectorAll('[data-toggleclientvis]').forEach(e=>e.onclick=()=>{let p=db.payments.find(x=>x.id===e.dataset.toggleclientvis);p.showClient=!p.showClient;e.classList.toggle('active');const status=e.parentElement.querySelector('[data-statusclientvis="'+e.dataset.toggleclientvis+'"]');if(status){status.textContent=p.showClient?'Visível':'Oculto';status.classList.toggle('active')}save();render()});
+ document.getElementById('newPaymentBtn')?.addEventListener('click',()=>{window.editingPaymentMethod=null;window.paymentMethodDraft={adjustType:'acrescimo',showClient:true};overlay='paymentMethodDialog';render()});
+ document.querySelectorAll('[data-clickpayment]').forEach(e=>e.onclick=()=>{let p=db.payments.find(x=>x.id===e.dataset.clickpayment);if(!p)return;window.editingPaymentMethod=p.id;const isDiscount=Number(p.fee||0)<0||Number(p.feeFixed||0)<0;window.paymentMethodDraft={name:p.name,adjustType:isDiscount?'desconto':'acrescimo',percent:Math.abs(Number(p.fee||0))||'',fixed:Math.abs(Number(p.feeFixed||0))||'',showClient:p.showClient!==false};overlay='paymentMethodDialog';render()});
+ document.querySelectorAll('[data-toggleclientvis]').forEach(e=>e.onclick=()=>{let p=db.payments.find(x=>x.id===e.dataset.toggleclientvis);p.showClient=!p.showClient;e.classList.toggle('active');const status=e.parentElement.querySelector('.toggle-status');if(status){status.textContent=p.showClient?'Visível':'Oculto';status.classList.toggle('active')}save();render()});
+ document.querySelectorAll('[data-pmadjust]').forEach(e=>e.onclick=()=>{window.paymentMethodDraft=window.paymentMethodDraft||{};window.paymentMethodDraft.name=document.getElementById('pmName')?.value;window.paymentMethodDraft.percent=document.getElementById('pmPercent')?.value;window.paymentMethodDraft.fixed=document.getElementById('pmFixed')?.value;window.paymentMethodDraft.showClient=document.getElementById('pmShowClient')?.checked;window.paymentMethodDraft.adjustType=e.dataset.pmadjust;render()});
+ document.getElementById('pmFixed')?.addEventListener('input',moneyMaskOnInput);
+ document.getElementById('savePaymentMethod')?.addEventListener('click',()=>{let n=document.getElementById('pmName').value.trim();if(!n){formErr='Informe o nome da forma de pagamento.';render();return}const sign=(window.paymentMethodDraft?.adjustType==='desconto')?-1:1;const fee=sign*Math.abs(Number(document.getElementById('pmPercent').value||0));const feeFixed=sign*moneyMaskParse(document.getElementById('pmFixed').value);const showClient=document.getElementById('pmShowClient')?.checked??true;if(window.editingPaymentMethod){let p=db.payments.find(x=>x.id===window.editingPaymentMethod);if(!p)return;p.name=n;p.fee=fee;p.feeFixed=feeFixed;p.showClient=showClient;window.editingPaymentMethod=null}else{db.payments.push({id:id('pay'),name:n,fee,feeFixed,active:true,showClient})}window.paymentMethodDraft={};formErr='';overlay=null;save();render()});
+ document.getElementById('deletePaymentMethod')?.addEventListener('click',()=>{if(!window.editingPaymentMethod)return;if(!confirm('Excluir esta forma de pagamento?'))return;db.payments=db.payments.filter(x=>x.id!==window.editingPaymentMethod);window.editingPaymentMethod=null;window.paymentMethodDraft={};overlay=null;save();render()});
  document.getElementById('addCustomer')?.addEventListener('click',()=>{let n=custName.value.trim(),ph=custPhone.value.trim(),street=custStreet.value.trim(),num=custNumber.value.trim(),comp=custComplement.value.trim(),ref=custReference.value.trim(),nid=custNeighborhood.value,nb=db.neighborhoods.find(x=>x.id===nid);if(!n)return alert('Informe o nome.');if(ph&&!validPhone(ph))return alert('WhatsApp inválido. Informe DDD + 9 dígitos.');if(!street||!num||!nid)return alert('Informe rua, número e bairro para o endereço de entrega.');const nc=nextCustomerCode();let c={id:id('c'),codeNum:nc.codeNum,code:nc.code,name:n,phone:ph?fmtPhone(ph):'',addresses:[],defaultAddressId:'',credit:0};let addr={id:id('addr'),label:'Principal',street,number:num,complement:comp,reference:ref,neighborhood:nid,neighborhoodName:nb.name,neighborhoodFee:nb.fee};c.addresses.push(addr);c.defaultAddressId=addr.id;syncCustomerLegacyAddress(c);db.customers.push(c);window.custDraft=null;save();render()});
  document.querySelectorAll('[data-addaddr]').forEach(e=>e.onclick=()=>{window.addingAddressFor=e.dataset.addaddr;window.addrDraft=null;formErr='';overlay='addCustomerAddress';render()});
  document.getElementById('newAddrNeighborhood')?.addEventListener('change',e=>{if(e.target.value==='__new__'){window.addrDraft={label:newAddrLabel.value,street:newAddrStreet.value,number:newAddrNumber.value,complement:newAddrComplement.value,reference:newAddrReference.value,neighborhood:''};window.newNbDraft={};window.neighborhoodDialogTarget='addr';formErr='';overlay='addNeighborhoodQuick';render()}});
@@ -2855,7 +2924,6 @@ document.getElementById('deleteAddonDialog')?.addEventListener('click',()=>{if(!
  document.getElementById('dialogNbFee')?.addEventListener('input',moneyMaskOnInput);
  document.getElementById('saveNbDialog')?.addEventListener('click',()=>{let n=document.getElementById('dialogNbName').value.trim(),city=document.getElementById('dialogNbMunicipio').value.trim(),f=moneyMaskParse(document.getElementById('dialogNbFee').value);if(!n||!(f>=0)){formErr='Informe nome e valor válidos.';render();return}if(window.editingNeighborhood){let nb=db.neighborhoods.find(x=>x.id===window.editingNeighborhood);if(!nb)return;nb.name=n;nb.municipio=city;nb.fee=f}else{db.neighborhoods.push({id:id('n'),name:n,municipio:city,fee:f,active:true})}window.editingNeighborhood=null;window.nbDialogDraft={};formErr='';overlay=null;save();render()});
  document.getElementById('deleteNbDialog')?.addEventListener('click',()=>{if(!window.editingNeighborhood)return;if(!confirm('Excluir esta taxa de entrega?'))return;db.neighborhoods=db.neighborhoods.filter(x=>x.id!==window.editingNeighborhood);window.editingNeighborhood=null;window.nbDialogDraft={};overlay=null;save();render()});
- document.querySelectorAll('[data-togglepay]').forEach(e=>e.onclick=()=>{let p=db.payments.find(x=>x.id===e.dataset.togglepay);p.active=!p.active;save();render()});document.querySelectorAll('[data-feepay]').forEach(e=>e.onchange=()=>{db.payments.find(x=>x.id===e.dataset.feepay).fee=Math.max(0,Number(e.value));save()});
  document.getElementById('applyReports')?.addEventListener('click',()=>{window.reportFilter={...window.reportFilter,from:rfFrom.value,to:rfTo.value,payment:rfPay.value,status:rfStatus.value};render()});
  document.getElementById('applyDeliveryReport')?.addEventListener('click',()=>{window.reportFilter={...window.reportFilter,from:rfFromEntrega.value,to:rfToEntrega.value,rider:rfRider.value};render()});
  document.getElementById('vendasDiaSearch')?.addEventListener('input',e=>{window.vendasDiaSearch=e.target.value;window.vendasDiaPage=1;const box=document.getElementById('vendasDiaResults');if(box){box.innerHTML=renderVendasDiaResults();bindVendasDiaResults(box);bindVendasDiaPager(box)}});
