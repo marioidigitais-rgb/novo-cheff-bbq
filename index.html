@@ -362,6 +362,25 @@ async function loadMenuFromSupabase(){
     db.payments.forEach(p=>{if(fixedMap[p.id]!==undefined)p.feeFixed=Number(fixedMap[p.id])||0});
    }
   }catch(e){}
+  try{
+   // Busca as classificações de produto (ex.: Lata, PET) à parte: se a
+   // tabela "package_types" ainda não existir no Supabase, essa consulta
+   // falha sozinha sem derrubar o restante do carregamento do cardápio.
+   const pkgTypesR=await sb.from('package_types').select('id,name');
+   if(!pkgTypesR.error&&pkgTypesR.data){
+    db.packageTypes=pkgTypesR.data.map(t=>({id:t.id,name:t.name}));
+   }
+  }catch(e){}
+  try{
+   // Busca a classificação de cada produto à parte: se a coluna
+   // "package_type" ainda não existir na tabela products do Supabase,
+   // essa consulta falha sozinha sem derrubar o restante do carregamento.
+   const pkgTypeR=await sb.from('products').select('id,package_type');
+   if(!pkgTypeR.error&&pkgTypeR.data){
+    const map={};pkgTypeR.data.forEach(x=>{map[x.id]=x.package_type});
+    db.products.forEach(p=>{if(map[p.id]!==undefined)p.packageType=map[p.id]||''});
+   }
+  }catch(e){}
   const hoursObj={};(hoursR.data||[]).forEach(h=>{hoursObj[h.weekday]={open:(h.open_time||'').slice(0,5),close:(h.close_time||'').slice(0,5),active:h.active}});
   if(Object.keys(hoursObj).length)db.hours=hoursObj;
   if((tablesR.data||[]).length)db.tables=tablesR.data.map(t=>t.name);
@@ -442,6 +461,7 @@ function __seedSyncSnapshot(){
  // Supabase o que acabou de vir de lá.
  __snapCommit('categories',db.categories);
  __snapCommit('products',db.products);
+ __snapCommit('packageTypes',db.packageTypes||[]);
  __snapCommit('addons',db.addons);
  __snapCommit('neighborhoods',db.neighborhoods);
  __snapCommit('payments',db.payments);
@@ -497,8 +517,14 @@ async function syncAddonsToSupabase(){
 }
 async function syncProductsToSupabase(){
  if(__snapEquals('products',db.products))return;
- const rows=db.products.map(p=>({id:p.id,category_id:p.cat,name:p.name,description:p.desc,price:p.price,old_price:p.oldPrice,stock:p.stock,active:p.active,show_stock:p.showStock,type:p.type,photo:p.photo||null}));
- await __upsertAndPrune('products',rows);
+ const rows=db.products.map(p=>({id:p.id,category_id:p.cat,name:p.name,description:p.desc,price:p.price,old_price:p.oldPrice,stock:p.stock,active:p.active,show_stock:p.showStock,type:p.type,photo:p.photo||null,package_type:p.packageType||null}));
+ try{
+  await __upsertAndPrune('products',rows);
+ }catch(e){
+  // Se a coluna "package_type" ainda não existir na tabela products do
+  // Supabase, tenta de novo sem ela, pra não travar a sincronização do restante.
+  await __upsertAndPrune('products',rows.map(({package_type,...r})=>r));
+ }
  // a relação produto × adicional é sempre derivada do que está nos
  // produtos agora, então é mais simples apagar tudo e recriar do zero.
  const delPA=await sb.from('product_addons').delete().not('product_id','is',null);
@@ -507,6 +533,19 @@ async function syncProductsToSupabase(){
  db.products.forEach(p=>(p.addons||[]).forEach(a=>paRows.push({product_id:p.id,addon_id:a.id,max_qty:a.max})));
  if(paRows.length){const insPA=await sb.from('product_addons').insert(paRows);if(insPA.error)throw insPA.error;}
  __snapCommit('products',db.products);
+}
+async function syncPackageTypesToSupabase(){
+ if(__snapEquals('packageTypes',db.packageTypes||[]))return;
+ try{
+  const rows=(db.packageTypes||[]).map(t=>({id:t.id,name:t.name}));
+  await __upsertAndPrune('package_types',rows);
+  __snapCommit('packageTypes',db.packageTypes||[]);
+ }catch(e){
+  // A tabela "package_types" pode não existir ainda no Supabase — os dados
+  // continuam salvos neste aparelho e a sincronização é tentada novamente
+  // na próxima alteração, sem travar a sincronização do restante.
+  console.error('Não foi possível sincronizar as classificações de produto com o Supabase:',e);
+ }
 }
 async function syncNeighborhoodsToSupabase(){
  if(__snapEquals('neighborhoods',db.neighborhoods))return;
@@ -552,6 +591,7 @@ async function syncSettingsToSupabase(){
 }
 async function syncAllToSupabase(){
  await syncCategoriesToSupabase();
+ await syncPackageTypesToSupabase();
  await syncAddonsToSupabase();
  await syncProductsToSupabase();
  await syncNeighborhoodsToSupabase();
@@ -780,7 +820,7 @@ setInterval(checkNewOrders,4000);
 window.addEventListener('storage',e=>{if(e.key===KEY)checkNewOrders()});
 function save(){localStorage.setItem(KEY,JSON.stringify(db));window.lastSeenOrderCount=db.orders.length;scheduleSupabaseSync()}
 async function load(){try{db=JSON.parse(localStorage.getItem(KEY))||structuredClone(DEFAULT)}catch(e){db=structuredClone(DEFAULT)}normalize();window.lastSeenOrderCount=db.orders.length;window.menuLoading=(route==='client');render();await loadMenuFromSupabase();normalize();if(window.supabaseMenuLoaded)__seedSyncSnapshot();window.menuLoading=false;render();startSupabaseRealtime()}
-function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.cancelamento??=DEFAULT.settings.messages.cancelamento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.categories??=structuredClone(DEFAULT.categories);db.categories.forEach(c=>{c.active=c.active!==false});db.products??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.riders.forEach(r=>{r.active=r.active!==false;r.createdAt=r.createdAt||new Date().toISOString()});db.orders??=[];db.ingredients??=[];db.cash??={open:false,initial:0,movements:[]};db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.type=p.type==='pi'?'pi':'pa';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true});db.payments.forEach(p=>{p.showClient??=true;p.fee=Number(p.fee)||0;p.feeFixed=Number(p.feeFixed)||0});
+function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.cancelamento??=DEFAULT.settings.messages.cancelamento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.categories??=structuredClone(DEFAULT.categories);db.categories.forEach(c=>{c.active=c.active!==false});db.products??=[];db.packageTypes??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.riders.forEach(r=>{r.active=r.active!==false;r.createdAt=r.createdAt||new Date().toISOString()});db.orders??=[];db.ingredients??=[];db.cash??={open:false,initial:0,movements:[]};db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.type=p.type==='pi'?'pi':'pa';p.packageType=p.packageType||'';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true});db.payments.forEach(p=>{p.showClient??=true;p.fee=Number(p.fee)||0;p.feeFixed=Number(p.feeFixed)||0});
  db.customerSeq??=0;
  db.customers.forEach(c=>{
   c.addresses??=[];
@@ -984,8 +1024,18 @@ function renderClient(){
  <div class="grid">${renderCategoryProducts()}</div>
  <div class="cartbar ${cart.length?'show':''}" id="cartbar"><span>${cart.reduce((a,x)=>a+x.qty,0)} item(ns) · ${money(cartSubtotal())}</span><b>Ver carrinho ›</b></div>${overlay?renderOverlay():''}</div>`;
 }
+function packageTypeName(id){const t=(db.packageTypes||[]).find(x=>x.id===id);return t?t.name:''}
+function orderedCategoryProducts(ps){
+ if(!ps.some(p=>p.packageType))return ps;
+ return ps.slice().sort((a,b)=>{
+  const ta=packageTypeName(a.packageType)||'\uFFFF',tb=packageTypeName(b.packageType)||'\uFFFF';
+  const cmpGroup=ta.localeCompare(tb,'pt-BR');
+  if(cmpGroup!==0)return cmpGroup;
+  return (a.name||'').localeCompare(b.name||'','pt-BR');
+ });
+}
 function renderCategoryProducts(){
- const cid=currentClientCat(), ps=db.products.filter(p=>p.cat===cid&&p.type!=='pi'), open=storeOpen();if(!ps.length)return '<div class="cardbox">Nenhum produto cadastrado nesta categoria.</div>';
+ const cid=currentClientCat(), ps=orderedCategoryProducts(db.products.filter(p=>p.cat===cid&&p.type!=='pi')), open=storeOpen();if(!ps.length)return '<div class="cardbox">Nenhum produto cadastrado nesta categoria.</div>';
  return ps.map(p=>{let stockOk=productAvailable(p);let avail=stockOk&&open;let onPromo=Number(p.oldPrice)>Number(p.price);return `<div class="card ${avail?'itemrow-clickable':'unavailable'}" ${avail?`data-add="${p.id}" style="cursor:pointer"`:''}>${p.photo?`<img class="card-photo" src="${p.photo}" alt="${esc(p.name)}">`:''}<h3>${esc(p.name)}</h3><div class="desc">${esc(p.desc)}</div><div class="row"><span>${onPromo?`<span class="price-old">${money(p.oldPrice)}</span>`:''}<span class="price">${money(p.price)}</span></span>${avail?'':`<span class="sold">${stockOk?'Loja fechada':'Produto esgotado'}</span>`}</div>${p.showStock?`<span class="stock">Estoque disponível: ${getProductStock(p)}</span>`:''}</div>`}).join('')
 }
 function renderOverlay(){
@@ -1428,7 +1478,7 @@ function renderAddNeighborhoodQuick(){
 }
 function renderMenu(){return `<div class="row" style="justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px"><h2 style="margin:0">Produtos e categorias</h2><button class="primary" id="openNewProduct" style="width:auto;padding:10px 18px">Novo +</button></div>
 <div class="cardbox"><h3>Importar produtos via planilha (Excel)</h3><p class="meta">Cadastre vários produtos de uma vez com um arquivo .xlsx ou .csv com as colunas Categoria, Nome, Preço, Estoque, Descrição, Exibir estoque (Sim/Não) e Tipo (PA ou PI, opcional — padrão PA se vazio). Categorias novas são criadas automaticamente. Se já existir um produto com o mesmo nome na mesma categoria, os dados dele são atualizados (preço, estoque, descrição etc.) em vez de criar um produto duplicado. Produtos importados como PI não precisam de receita aqui: adicione a receita depois em Cadastro › Receitas.</p><div class="row" style="margin-top:9px;flex-wrap:wrap;gap:8px"><button type="button" class="btn" id="downloadImportTemplate">⬇️ Baixar modelo</button><input type="file" id="importProductsFile" accept=".xlsx,.xls,.csv" style="flex:1;min-width:180px;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:8px;color:var(--cream)"></div><button type="button" class="primary" id="importProductsBtn" style="margin-top:10px">📥 Importar planilha</button>${window.importMsg?`<p class="${window.importMsgType==='err'?'err':'ok'}" style="margin-top:8px">${esc(window.importMsg)}</p>`:''}</div>
-${db.categories.map(c=>`<h3 style="margin:15px 0 8px;color:var(--mustard)">${esc(c.name)}</h3>${db.products.filter(p=>p.cat===c.id).map(p=>{const onPromo=Number(p.oldPrice)>Number(p.price);return `<div class="itemrow itemrow-clickable" data-editprod="${p.id}" style="cursor:pointer"><div class="row">${p.photo?`<img src="${p.photo}" style="width:36px;height:36px;object-fit:cover;border-radius:6px;margin-right:8px">`:''}<span class="tag" style="margin-right:6px">${productTypeLabel(p)}</span><b style="flex:1">${esc(p.name)}</b>${onPromo?`<span class="price-old">${money(p.oldPrice)}</span>`:''}<span class="price">${money(p.price)}</span></div><div class="meta">Custo médio ${money(productAvgCost(p.id))} · Estoque ${getProductStock(p)}${productHasRecipe(p)?' (calculado pela receita)':''} · ${p.showStock?'Exibe estoque ao cliente':'Oculta estoque do cliente'} · ${p.active?'Ativo':'Inativo'} · Adicionais: ${(p.addons||[]).map(o=>{const ad=db.addons.find(x=>x.id===o.id);return ad?`${esc(ad.name)} (até ${o.max})`:null}).filter(Boolean).join(', ')||'nenhum'}</div><div class="menu-item-actions"><button type="button" class="btn" data-dupprod="${p.id}">📋 Duplicar</button></div><div class="meta" style="opacity:.65;margin-top:4px">Toque para editar, excluir ou alterar adicionais ›</div></div>`}).join('')}`).join('')}`}
+${db.categories.map(c=>`<h3 style="margin:15px 0 8px;color:var(--mustard)">${esc(c.name)}</h3>${db.products.filter(p=>p.cat===c.id).map(p=>{const onPromo=Number(p.oldPrice)>Number(p.price);return `<div class="itemrow itemrow-clickable" data-editprod="${p.id}" style="cursor:pointer"><div class="row">${p.photo?`<img src="${p.photo}" style="width:36px;height:36px;object-fit:cover;border-radius:6px;margin-right:8px">`:''}<span class="tag" style="margin-right:6px">${productTypeLabel(p)}</span><b style="flex:1">${esc(p.name)}</b>${onPromo?`<span class="price-old">${money(p.oldPrice)}</span>`:''}<span class="price">${money(p.price)}</span></div><div class="meta">Custo médio ${money(productAvgCost(p.id))} · Estoque ${getProductStock(p)}${productHasRecipe(p)?' (calculado pela receita)':''} · ${p.showStock?'Exibe estoque ao cliente':'Oculta estoque do cliente'} · ${p.active?'Ativo':'Inativo'}${p.packageType?` · Classificação: ${esc(packageTypeName(p.packageType))}`:''} · Adicionais: ${(p.addons||[]).map(o=>{const ad=db.addons.find(x=>x.id===o.id);return ad?`${esc(ad.name)} (até ${o.max})`:null}).filter(Boolean).join(', ')||'nenhum'}</div><div class="menu-item-actions"><button type="button" class="btn" data-dupprod="${p.id}">📋 Duplicar</button></div><div class="meta" style="opacity:.65;margin-top:4px">Toque para editar, excluir ou alterar adicionais ›</div></div>`}).join('')}`).join('')}`}
 function renderNewProductModal(){
  const hasCats=db.categories.length>0;
  const curType=window.npTypeSelected||'pa';
@@ -1438,6 +1488,7 @@ function renderNewProductModal(){
  <p class="meta" style="margin-top:-6px;margin-bottom:11px">PA é o item final vendido ao cliente (ex.: Cheeseburger). PI é um preparo interno (ex.: Purê de Batatas, molho da casa) usado como ingrediente na receita de um PA — não aparece no cardápio nem no PDV.</p>
  <div class="field"><label>Nome do produto</label><input autocomplete="off" id="npName" placeholder="Ex.: Cheeseburger Duplo"></div>
  <div class="field"><label>Categoria</label>${hasCats?`<div class="row" style="gap:8px"><select id="npCat" style="flex:1">${db.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select><button type="button" class="btn" id="npNewCatToggle" style="white-space:nowrap">+ Novo</button></div><div id="npNewCatWrap" style="display:none;margin-top:8px"><input autocomplete="off" id="npNewCatName" placeholder="Nome da nova categoria"></div>`:`<input autocomplete="off" id="npNewCatName" placeholder="Nome da nova categoria"><p class="meta" style="margin-top:6px">Nenhuma categoria cadastrada ainda — digite acima para criar a primeira.</p>`}</div>
+ <div class="field"><label>Classificação (opcional)</label><select id="npPackageType"><option value="">Nenhuma</option>${(db.packageTypes||[]).map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('')}<option value="__new__">+ Cadastrar nova classificação</option></select><p class="meta" style="margin-top:6px">Use para agrupar e ordenar o cardápio do cliente por tipo (ex.: Lata, PET, Garrafa) — dentro da mesma categoria, os produtos aparecem agrupados por classificação e em ordem alfabética.</p></div>
  <div class="formgrid"><div class="field"><label>Custo (calculado automaticamente)</label><input autocomplete="off" id="npCost" type="text" value="R$ 0,00" disabled></div><div class="field"><label>Valor de venda</label><input autocomplete="off" id="npPrice" type="text" inputmode="decimal" placeholder="0,00"></div></div>
  <p class="meta" style="margin-top:-6px;margin-bottom:11px">💰 O custo é calculado automaticamente pela média das últimas 3 entradas de fornecedor deste produto. Como ainda não há entradas registradas para ele, o custo começa em R$ 0,00 e será atualizado conforme você registrar entradas em Estoque › Entradas.</p>
  <div class="formgrid"><div class="field"><label>Preço antigo (opcional, para promoção)</label><input autocomplete="off" id="npOldPrice" type="text" inputmode="decimal" placeholder="0,00"></div><div class="field"><label>Estoque inicial</label><input autocomplete="off" id="npStock" type="number" min="0" value="0"></div></div>
@@ -1457,6 +1508,7 @@ function renderEditProductModal(){
  <p class="meta" style="margin-top:-6px;margin-bottom:11px">PA é o item final vendido ao cliente. PI é um preparo interno (ex.: Purê de Batatas, molho da casa) usado como ingrediente na receita de um PA — não aparece no cardápio nem no PDV.</p>
  <div class="field"><label>Nome</label><input autocomplete="off" id="epName" value="${esc(p.name)}"></div>
  <div class="field"><label>Categoria</label>${db.categories.length?`<div class="row" style="gap:8px"><select id="epCat" style="flex:1">${db.categories.map(c=>`<option value="${c.id}" ${c.id===p.cat?'selected':''}>${esc(c.name)}</option>`).join('')}</select><button type="button" class="btn" id="epNewCatToggle" style="white-space:nowrap">+ Novo</button></div><div id="epNewCatWrap" style="display:none;margin-top:8px"><input autocomplete="off" id="epNewCatName" placeholder="Nome da nova categoria"></div>`:`<input autocomplete="off" id="epNewCatName" placeholder="Nome da nova categoria"><p class="meta" style="margin-top:6px">Nenhuma categoria cadastrada ainda — digite acima para criar a primeira.</p>`}</div>
+ <div class="field"><label>Classificação (opcional)</label><select id="epPackageType"><option value="">Nenhuma</option>${(db.packageTypes||[]).map(t=>`<option value="${t.id}" ${t.id===p.packageType?'selected':''}>${esc(t.name)}</option>`).join('')}<option value="__new__">+ Cadastrar nova classificação</option></select><p class="meta" style="margin-top:6px">Use para agrupar e ordenar o cardápio do cliente por tipo (ex.: Lata, PET, Garrafa) — dentro da mesma categoria, os produtos aparecem agrupados por classificação e em ordem alfabética.</p></div>
  <div class="formgrid"><div class="field"><label>Custo (calculado automaticamente)</label><input autocomplete="off" id="epCost" type="text" value="${money(productAvgCost(p.id))}" disabled></div><div class="field"><label>Valor de venda</label><input autocomplete="off" id="epPrice" type="text" inputmode="decimal" value="${moneyMaskFormat(p.price)}"></div></div>
  <p class="meta" style="margin-top:-6px;margin-bottom:11px">💰 Custo calculado automaticamente pela média das últimas 3 entradas de fornecedor deste produto${(db.stockMovements||[]).some(m=>m.productId===p.id&&m.type==='entrada')?'':' (ainda sem entradas registradas — o custo é atualizado ao registrar entradas em Estoque › Entradas)'}.</p>
  <div class="formgrid"><div class="field"><label>Preço antigo (opcional, para promoção)</label><input autocomplete="off" id="epOldPrice" type="text" inputmode="decimal" value="${p.oldPrice?moneyMaskFormat(p.oldPrice):''}" placeholder="0,00"></div><div class="field"><label>Estoque${productHasRecipe(p)?' (calculado pela receita)':''}</label><input autocomplete="off" id="epStock" type="number" min="0" value="${getProductStock(p)}" ${productHasRecipe(p)?'disabled title="Este produto tem receita: o estoque é calculado automaticamente a partir das matérias-primas."':''}></div></div>${productHasRecipe(p)?'<p class="meta" style="margin-top:-6px;margin-bottom:11px">📦 O estoque deste produto é calculado automaticamente com base no saldo das matérias-primas da receita.</p>':''}
@@ -1491,6 +1543,19 @@ function findOrCreateCategoryByName(name){
  let c=db.categories.find(x=>x.name.toLowerCase()===name.toLowerCase());
  if(!c){c={id:id('cat'),name,active:true};db.categories.push(c)}
  return c;
+}
+function handlePackageTypeSelect(selectEl){
+ if(!selectEl||selectEl.value!=='__new__')return;
+ const name=prompt('Nome da nova classificação (ex.: Lata, PET, Vidro):','');
+ if(name&&name.trim()){
+  const t={id:id('pkg'),name:name.trim()};
+  db.packageTypes=db.packageTypes||[];
+  db.packageTypes.push(t);
+  save();
+  selectEl.innerHTML=`<option value="">Nenhuma</option>${db.packageTypes.map(x=>`<option value="${x.id}" ${x.id===t.id?'selected':''}>${esc(x.name)}</option>`).join('')}<option value="__new__">+ Cadastrar nova classificação</option>`;
+ }else{
+  selectEl.value='';
+ }
 }
 function normalizeProductName(s){return String(s||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')}
 function findExistingProductByNameCat(name,catId){return db.products.find(p=>p.cat===catId&&normalizeProductName(p.name)===normalizeProductName(name))}
@@ -2664,6 +2729,7 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  document.getElementById('npType')?.addEventListener('change',e=>{window.npTypeSelected=e.target.value;render()});
  document.getElementById('openNewProduct')?.addEventListener('click',()=>{window.npPhotoData=null;window.npTypeSelected=null;formErr='';overlay='newProduct';render()});
  document.getElementById('npNewCatToggle')?.addEventListener('click',()=>{const wrap=document.getElementById('npNewCatWrap');if(!wrap)return;const showing=wrap.style.display!=='none';wrap.style.display=showing?'none':'block';if(!showing)document.getElementById('npNewCatName')?.focus()});
+ document.getElementById('npPackageType')?.addEventListener('change',e=>handlePackageTypeSelect(e.target));
  document.querySelectorAll('[data-newaddon-plus]').forEach(e=>e.onclick=()=>{let aid=e.dataset.newaddonPlus,a=db.addons.find(x=>x.id===aid),el=document.getElementById('newAddonMax_'+aid),q=Number(el.textContent||1);if(a&&q<a.max){el.textContent=q+1;const cb=document.querySelector(`[data-newaddon="${aid}"]`);if(cb)cb.checked=true}});
  document.querySelectorAll('[data-newaddon-minus]').forEach(e=>e.onclick=()=>{let aid=e.dataset.newaddonMinus,el=document.getElementById('newAddonMax_'+aid),q=Number(el.textContent||1);if(q>1)el.textContent=q-1});
  document.getElementById('npPrice')?.addEventListener('input',moneyMaskOnInput);
@@ -2676,7 +2742,7 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
   else if(catEl)catId=catEl.value;
   if(!name||!(price>0)||!catId){formErr='Preencha nome, categoria e preço.';render();return}
   let type=document.getElementById('npType')?.value==='pi'?'pi':'pa';
-  db.products.push({id:id('p'),cat:catId,name,price,oldPrice,stock,desc,type,active:document.getElementById('npActive')?.checked!==false,showStock:document.getElementById('npShowStock')?.checked||false,addons,photo:window.npPhotoData||null});
+  db.products.push({id:id('p'),cat:catId,name,price,oldPrice,stock,desc,type,active:document.getElementById('npActive')?.checked!==false,showStock:document.getElementById('npShowStock')?.checked||false,addons,packageType:document.getElementById('npPackageType')?.value||'',photo:window.npPhotoData||null});
   window.npPhotoData=null;formErr='';overlay=null;save();render()
  });
  document.querySelectorAll('[data-editprod]').forEach(e=>e.onclick=()=>{window.editingProduct=e.dataset.editprod;window.epPhotoData=null;window.epTypeSelected=null;const p=db.products.find(x=>x.id===e.dataset.editprod);window.epSnapshot=p?JSON.parse(JSON.stringify(p)):null;window.epIsNewDup=false;formErr='';overlay='editProduct';render()});
@@ -2726,7 +2792,8 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  document.getElementById('epPrice')?.addEventListener('input',moneyMaskOnInput);
  document.getElementById('epOldPrice')?.addEventListener('input',moneyMaskOnInput);
  document.getElementById('epNewCatToggle')?.addEventListener('click',()=>{const wrap=document.getElementById('epNewCatWrap');if(!wrap)return;const showing=wrap.style.display!=='none';wrap.style.display=showing?'none':'block';if(!showing)document.getElementById('epNewCatName')?.focus()});
- document.getElementById('saveEditProduct')?.addEventListener('click',()=>{let p=db.products.find(x=>x.id===window.editingProduct);if(!p)return;let name=epName.value.trim(),price=moneyMaskParse(epPrice.value),oldPrice=Math.max(0,moneyMaskParse(document.getElementById('epOldPrice')?.value)),stock=Math.max(0,Number(epStock.value||0));let newCatEl=document.getElementById('epNewCatName'),newCatName=newCatEl?newCatEl.value.trim():'';let catEl=document.getElementById('epCat'),catId=null;if(newCatName){let c=findOrCreateCategoryByName(newCatName);catId=c?.id||null}else if(catEl)catId=catEl.value;if(!name||!(price>0)||!catId){formErr='Informe nome, categoria e preço válidos.';render();return}p.name=name;p.cat=catId;p.price=price;p.oldPrice=oldPrice;p.type=document.getElementById('epType')?.value==='pi'?'pi':'pa';if(!productHasRecipe(p))p.stock=stock;p.desc=epDesc.value.trim();p.showStock=document.getElementById('epShowStock')?.checked||false;p.active=document.getElementById('epActive')?.checked||false;p.addons=[...document.querySelectorAll('[data-editaddon]:checked')].map(x=>{let aid=x.dataset.editaddon,a=db.addons.find(y=>y.id===aid),el=document.getElementById('editAddonMax_'+aid),mx=Math.max(1,Math.min(a?a.max:1,Number(el?.textContent||1)));return {id:aid,max:mx}});if(window.epPhotoData)p.photo=window.epPhotoData;window.epPhotoData=null;window.epSnapshot=null;window.epIsNewDup=false;formErr='';overlay=null;window.editingProduct=null;save();render()});
+ document.getElementById('epPackageType')?.addEventListener('change',e=>handlePackageTypeSelect(e.target));
+ document.getElementById('saveEditProduct')?.addEventListener('click',()=>{let p=db.products.find(x=>x.id===window.editingProduct);if(!p)return;let name=epName.value.trim(),price=moneyMaskParse(epPrice.value),oldPrice=Math.max(0,moneyMaskParse(document.getElementById('epOldPrice')?.value)),stock=Math.max(0,Number(epStock.value||0));let newCatEl=document.getElementById('epNewCatName'),newCatName=newCatEl?newCatEl.value.trim():'';let catEl=document.getElementById('epCat'),catId=null;if(newCatName){let c=findOrCreateCategoryByName(newCatName);catId=c?.id||null}else if(catEl)catId=catEl.value;if(!name||!(price>0)||!catId){formErr='Informe nome, categoria e preço válidos.';render();return}p.name=name;p.cat=catId;p.price=price;p.oldPrice=oldPrice;p.type=document.getElementById('epType')?.value==='pi'?'pi':'pa';if(!productHasRecipe(p))p.stock=stock;p.desc=epDesc.value.trim();p.showStock=document.getElementById('epShowStock')?.checked||false;p.active=document.getElementById('epActive')?.checked||false;p.packageType=document.getElementById('epPackageType')?.value||'';p.addons=[...document.querySelectorAll('[data-editaddon]:checked')].map(x=>{let aid=x.dataset.editaddon,a=db.addons.find(y=>y.id===aid),el=document.getElementById('editAddonMax_'+aid),mx=Math.max(1,Math.min(a?a.max:1,Number(el?.textContent||1)));return {id:aid,max:mx}});if(window.epPhotoData)p.photo=window.epPhotoData;window.epPhotoData=null;window.epSnapshot=null;window.epIsNewDup=false;formErr='';overlay=null;window.editingProduct=null;save();render()});
  document.getElementById('deleteProduct')?.addEventListener('click',()=>{let p=db.products.find(x=>x.id===window.editingProduct);if(!p)return;if(!confirm('Excluir "'+p.name+'"? Esta ação não pode ser desfeita.'))return;db.products=db.products.filter(x=>x.id!==p.id);overlay=null;window.editingProduct=null;window.epSnapshot=null;window.epIsNewDup=false;save();render()});
  document.querySelectorAll('[data-estoque-view]').forEach(e=>e.onclick=()=>{window.estoqueView=e.dataset.estoqueView;formErr='';render()});
  bindItemPickerResults();
