@@ -381,6 +381,15 @@ async function loadMenuFromSupabase(){
     db.products.forEach(p=>{if(map[p.id]!==undefined)p.packageType=map[p.id]||''});
    }
   }catch(e){}
+  try{
+   // Busca as matérias-primas à parte: se a tabela "ingredients" ainda não
+   // existir no Supabase, essa consulta falha sozinha sem derrubar o
+   // restante do carregamento do cardápio.
+   const ingR=await sb.from('ingredients').select('id,name,unit,stock,cost,active');
+   if(!ingR.error&&ingR.data){
+    db.ingredients=ingR.data.map(m=>({id:m.id,name:m.name,unit:m.unit,stock:Number(m.stock)||0,cost:Number(m.cost)||0,active:m.active!==false}));
+   }
+  }catch(e){}
   const hoursObj={};(hoursR.data||[]).forEach(h=>{hoursObj[h.weekday]={open:(h.open_time||'').slice(0,5),close:(h.close_time||'').slice(0,5),active:h.active}});
   if(Object.keys(hoursObj).length)db.hours=hoursObj;
   if((tablesR.data||[]).length)db.tables=tablesR.data.map(t=>t.name);
@@ -462,6 +471,7 @@ function __seedSyncSnapshot(){
  __snapCommit('categories',db.categories);
  __snapCommit('products',db.products);
  __snapCommit('packageTypes',db.packageTypes||[]);
+ __snapCommit('ingredients',db.ingredients);
  __snapCommit('addons',db.addons);
  __snapCommit('neighborhoods',db.neighborhoods);
  __snapCommit('payments',db.payments);
@@ -547,6 +557,19 @@ async function syncPackageTypesToSupabase(){
   console.error('Não foi possível sincronizar as classificações de produto com o Supabase:',e);
  }
 }
+async function syncIngredientsToSupabase(){
+ if(__snapEquals('ingredients',db.ingredients))return;
+ try{
+  const rows=db.ingredients.map(m=>({id:m.id,name:m.name,unit:m.unit,stock:m.stock,cost:m.cost,active:m.active!==false}));
+  await __upsertAndPrune('ingredients',rows);
+  __snapCommit('ingredients',db.ingredients);
+ }catch(e){
+  // A tabela "ingredients" pode não existir ainda no Supabase — os dados
+  // continuam salvos neste aparelho e a sincronização é tentada novamente
+  // na próxima alteração, sem travar a sincronização do restante.
+  console.error('Não foi possível sincronizar as matérias-primas com o Supabase:',e);
+ }
+}
 async function syncNeighborhoodsToSupabase(){
  if(__snapEquals('neighborhoods',db.neighborhoods))return;
  const rows=db.neighborhoods.map(n=>({id:n.id,name:n.name,fee:n.fee,municipio:n.municipio||'',active:n.active!==false}));
@@ -592,6 +615,7 @@ async function syncSettingsToSupabase(){
 async function syncAllToSupabase(){
  await syncCategoriesToSupabase();
  await syncPackageTypesToSupabase();
+ await syncIngredientsToSupabase();
  await syncAddonsToSupabase();
  await syncProductsToSupabase();
  await syncNeighborhoodsToSupabase();
@@ -609,7 +633,10 @@ let __syncTimer=null;
 function scheduleSupabaseSync(){
  clearTimeout(__syncTimer);
  __syncTimer=setTimeout(()=>{
-  syncAllToSupabase().catch(e=>console.error('Falha ao sincronizar com o Supabase (os dados continuam salvos neste aparelho e serão reenviados na próxima alteração):',e));
+  window.__syncingNow=true;
+  syncAllToSupabase()
+   .catch(e=>console.error('Falha ao sincronizar com o Supabase (os dados continuam salvos neste aparelho e serão reenviados na próxima alteração):',e))
+   .finally(()=>{clearTimeout(window.__syncingNowTimer);window.__syncingNowTimer=setTimeout(()=>{window.__syncingNow=false},2500)});
  },1200);
 }
 // Escuta mudanças feitas por OUTROS aparelhos direto no Supabase (outro
@@ -618,8 +645,10 @@ function scheduleSupabaseSync(){
 // (900ms) pra não brigar com uma sincronização local que acabou de sair.
 let __realtimeReloadTimer=null;
 function __scheduleRealtimeReload(){
+ if(window.__syncingNow)return; // é o nosso próprio salvamento voltando pelo tempo real — os dados locais já são os mais recentes, recarregar aqui reverteria a própria edição
  clearTimeout(__realtimeReloadTimer);
  __realtimeReloadTimer=setTimeout(async()=>{
+  if(window.__syncingNow)return;
   await loadMenuFromSupabase();
   if(window.supabaseMenuLoaded){normalize();__seedSyncSnapshot();render()}
  },900);
@@ -634,6 +663,18 @@ function startSupabaseRealtime(){
    .on('postgres_changes',{event:'*',schema:'public',table:'payment_methods'},__scheduleRealtimeReload)
    .on('postgres_changes',{event:'*',schema:'public',table:'settings'},__scheduleRealtimeReload)
    .subscribe();
+ }catch(e){console.error('Não foi possível ativar a atualização em tempo real do Supabase:',e)}
+ try{
+  // Canal à parte para tabelas mais novas (matérias-primas e classificações
+  // de produto): se elas ainda não existirem no Supabase, só esse canal
+  // falha ao inscrever, sem derrubar a atualização em tempo real das
+  // demais tabelas acima.
+  sb.channel('cardapio-mudou-2')
+   .on('postgres_changes',{event:'*',schema:'public',table:'ingredients'},__scheduleRealtimeReload)
+   .on('postgres_changes',{event:'*',schema:'public',table:'package_types'},__scheduleRealtimeReload)
+   .subscribe();
+ }catch(e){}
+ try{
   sb.channel('pedidos-mudou')
    .on('postgres_changes',{event:'*',schema:'public',table:'orders'},payload=>{
     // Se o pedido já existir localmente, não sobrescreve o carrinho/itens
