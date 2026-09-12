@@ -688,6 +688,7 @@ function startSupabaseRealtime(){
 }
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=n=>'R$ '+Number(n||0).toFixed(2).replace('.',',');
+function moneyPrecise(n){n=Number(n)||0;let s=n.toFixed(4).replace(/0+$/,'').replace(/\.$/,'.00');let [ip,dp='']=s.split('.');if(dp.length<2)dp=dp.padEnd(2,'0');return 'R$ '+ip+','+dp}
 function paymentAdjustText(p){const parts=[],fee=Number(p?.fee||0),fixed=Number(p?.feeFixed||0);if(fee)parts.push(`${fee>0?'+':'-'}${Math.abs(fee)}%`);if(fixed)parts.push(`${fixed>0?'+':'-'}${money(Math.abs(fixed))}`);return parts.join(' ')}
 function moneyMaskFormat(val){let cents;if(typeof val==='number'){cents=Math.round(val*100)}else{cents=parseInt(String(val||'').replace(/\D/g,'')||'0',10)}if(!Number.isFinite(cents))cents=0;return (cents/100).toFixed(2).replace('.',',')}
 function moneyMaskParse(str){if(str==null||str==='')return 0;if(typeof str==='number')return str;const n=parseFloat(String(str).replace(/[^\d,-]/g,'').replace(',','.'));return Number.isFinite(n)?n:0}
@@ -2396,7 +2397,7 @@ function renderCadastroMaterias(){
       <span class="addon-status ${statusClass}">${statusText}</span>
      </div>
      <div class="addon-meta">
-      📦 Estoque atual: <b style="color:${availColor}">${available}</b> ${esc(m.unit)} · 💰 ${money(m.cost||0)}/${esc(m.unit)}${usedBy.length?` · Usada em: ${usedBy.map(p=>esc(p.name)).join(', ')}`:''}
+      📦 Estoque atual: <b style="color:${availColor}">${available}</b> ${esc(m.unit)} · 💰 ${moneyPrecise(m.cost||0)}/${esc(m.unit)}${usedBy.length?` · Usada em: ${usedBy.map(p=>esc(p.name)).join(', ')}`:''}
      </div>
     </div>`;
    });
