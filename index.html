@@ -1896,8 +1896,9 @@ function renderEstoqueEntradas(){
  <div id="stockPickerBelow_entrada">${itemPickerBelowHtml('entrada')}</div>
  <div class="formgrid" style="margin-top:10px">
   <div class="field"><label>Quantidade${pendingItem?' ('+esc(stockItemUnit(d.itemType,pendingItem))+')':''}</label><input autocomplete="off" id="stockEntradaQty" type="number" min="0.01" step="0.01" value="${esc(d.qty||1)}"></div>
-  <div class="field"><label>Valor unitário (R$)</label><input autocomplete="off" id="stockEntradaUnitPrice" type="text" inputmode="decimal" value="${d.unitPrice?moneyMaskFormat(Number(d.unitPrice)||0):''}" placeholder="0,00"></div>
+  <div class="field"><label>Valor unitário (R$)</label><input autocomplete="off" id="stockEntradaUnitPrice" type="text" inputmode="decimal" value="${d.unitPrice?String(d.unitPrice).replace('.',','):''}" placeholder="Ex.: 54 ou 0,054"></div>
  </div>
+ <p class="meta" style="margin-top:-4px">💡 Se o item for uma matéria-prima com estoque em gramas ou ml, informe o valor pela MESMA unidade (ex.: quilo a R$ 54,00 → 0,054 por grama). Aceita várias casas decimais.</p>
  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  <button type="button" class="btn" id="addStockEntradaItem" style="margin-top:10px">➕ Adicionar item à nota</button>
  </div>
@@ -2496,7 +2497,7 @@ function renderMateriaDialog(){
  <div class="field"><label>Unidade de medida</label><select id="dialogMatUnit"><option value="">Selecione</option>${materiaUnitOptionsHtml(d.unit||'')}</select></div>
  <div class="grid2">
   <div class="field"><label>Estoque atual</label><input autocomplete="off" id="dialogMatStock" type="number" value="${d.stock||''}" placeholder="0"></div>
-  <div class="field"><label>Custo por unidade</label><input autocomplete="off" id="dialogMatCost" type="text" inputmode="decimal" value="${d.cost?moneyMaskFormat(Number(d.cost)||0):''}" placeholder="0,00"></div>
+  <div class="field"><label>Custo por unidade</label><input autocomplete="off" id="dialogMatCost" type="text" inputmode="decimal" value="${d.cost?String(d.cost).replace('.',','):''}" placeholder="Ex.: 54 (por kg) ou 0,054 (por g)"><p class="meta" style="margin-top:6px">Use o preço pela MESMA unidade escolhida acima. Ex.: se a unidade é "g" e o quilo custa R$ 54,00, o custo por grama é 0,054 — pode digitar com 3 ou 4 casas decimais.</p></div>
  </div>
  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  <div class="row" style="margin-top:12px">
@@ -2864,7 +2865,7 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  document.getElementById('stockEntradaManualNote')?.addEventListener('input',e=>{itemDraftFor('entrada').manualNote=e.target.value});
  document.getElementById('stockEntradaNf')?.addEventListener('input',e=>{itemDraftFor('entrada').nfNumber=e.target.value});
  document.getElementById('stockEntradaQty')?.addEventListener('input',e=>{itemDraftFor('entrada').qty=e.target.value});
- document.getElementById('stockEntradaUnitPrice')?.addEventListener('input',e=>{moneyMaskOnInput(e);itemDraftFor('entrada').unitPrice=e.target.value});
+ document.getElementById('stockEntradaUnitPrice')?.addEventListener('input',e=>{itemDraftFor('entrada').unitPrice=e.target.value});
  document.getElementById('stockEntradaNote')?.addEventListener('input',e=>{itemDraftFor('entrada').note=e.target.value});
  document.getElementById('stockEntradaPaymentCondition')?.addEventListener('change',e=>{const dd=itemDraftFor('entrada');dd.paymentCondition=e.target.value;dd.paymentMethod='';dd.paymentDueDate='';render()});
  document.getElementById('stockEntradaPaymentMethod')?.addEventListener('change',e=>{itemDraftFor('entrada').paymentMethod=e.target.value});
@@ -2891,7 +2892,7 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
   const item=findStockItem(d.itemType,d.itemId);
   const qtyRaw=Number(document.getElementById('stockEntradaQty')?.value||0);
   const qty=d.itemType==='produto'?Math.max(0,Math.round(qtyRaw)):qtyRaw;
-  const unitPrice=Math.max(0,moneyMaskParse(document.getElementById('stockEntradaUnitPrice')?.value));
+  const unitPrice=Math.max(0,parseFloat(String(document.getElementById('stockEntradaUnitPrice')?.value||'0').replace(',','.'))||0);
   if(!item){formErr='Selecione um produto ou matéria-prima da lista.';render();return}
   if(!(qty>0)){formErr='Informe uma quantidade válida.';render();return}
   const unit=stockItemUnit(d.itemType,item);
@@ -3103,8 +3104,7 @@ document.getElementById('deleteAddonDialog')?.addEventListener('click',()=>{if(!
  document.getElementById('deleteSupplierDialog')?.addEventListener('click',()=>{if(!window.editingSupplier)return;if(!confirm('Excluir este fornecedor?'))return;db.suppliers=db.suppliers.filter(x=>x.id!==window.editingSupplier);window.editingSupplier=null;window.supplierDraft={};overlay=null;save();render()});
  document.getElementById('newMateriaBtn')?.addEventListener('click',()=>{window.editingMateria=null;window.materiaDraft={};formErr='';overlay='materiaDialog';render()});
  document.querySelectorAll('[data-clickmateria]').forEach(e=>e.onclick=()=>{let mid=e.dataset.clickmateria;let m=db.ingredients.find(x=>x.id===mid);if(!m)return;window.editingMateria=mid;window.materiaDraft={name:m.name,unit:m.unit,stock:m.stock,cost:m.cost};formErr='';overlay='materiaDialog';render()});
- document.getElementById('dialogMatCost')?.addEventListener('input',moneyMaskOnInput);
- document.getElementById('saveMateriaDialog')?.addEventListener('click',()=>{let n=document.getElementById('dialogMatName').value.trim(),unit=document.getElementById('dialogMatUnit').value.trim(),stockRaw=document.getElementById('dialogMatStock').value,costRaw=document.getElementById('dialogMatCost').value,stock=Math.max(0,Number(stockRaw||0)),cost=Math.max(0,moneyMaskParse(costRaw));window.materiaDraft={name:n,unit,stock:stockRaw,cost:costRaw};if(!n||!unit){formErr='Informe nome e unidade de medida.';render();return}if(window.editingMateria){let m=db.ingredients.find(x=>x.id===window.editingMateria);if(!m)return;m.name=n;m.unit=unit;m.stock=stock;m.cost=cost;window.editingMateria=null}else{db.ingredients.push({id:id('ing'),name:n,unit,stock,cost,active:true})}window.materiaDraft={};formErr='';overlay=null;save();render()});
+ document.getElementById('saveMateriaDialog')?.addEventListener('click',()=>{let n=document.getElementById('dialogMatName').value.trim(),unit=document.getElementById('dialogMatUnit').value.trim(),stockRaw=document.getElementById('dialogMatStock').value,costRaw=document.getElementById('dialogMatCost').value,stock=Math.max(0,Number(stockRaw||0)),cost=Math.max(0,parseFloat(String(costRaw||'0').replace(',','.'))||0);window.materiaDraft={name:n,unit,stock:stockRaw,cost:costRaw};if(!n||!unit){formErr='Informe nome e unidade de medida.';render();return}if(window.editingMateria){let m=db.ingredients.find(x=>x.id===window.editingMateria);if(!m)return;m.name=n;m.unit=unit;m.stock=stock;m.cost=cost;window.editingMateria=null}else{db.ingredients.push({id:id('ing'),name:n,unit,stock,cost,active:true})}window.materiaDraft={};formErr='';overlay=null;save();render()});
  document.getElementById('deleteMateriaDialog')?.addEventListener('click',()=>{if(!window.editingMateria)return;let mid=window.editingMateria;if(!confirm('Excluir esta matéria-prima? Receitas que a usam também serão afetadas.'))return;db.ingredients=db.ingredients.filter(x=>x.id!==mid);db.products.forEach(p=>{p.recipe=(p.recipe||[]).filter(r=>r.ingredientId!==mid)});window.editingMateria=null;window.materiaDraft={};overlay=null;save();render()});
  document.querySelectorAll('[data-editrecipe]').forEach(e=>e.onclick=(ev)=>{if(ev.target.closest('button'))return;let pid=e.dataset.editrecipe;let p=db.products.find(x=>x.id===pid);if(!p)return;window.editingProduct=pid;window.recipeForProduct=pid;overlay='editProduct';render()});
  document.querySelectorAll('[data-addrecipe]').forEach(e=>e.onclick=(ev)=>{ev.stopPropagation();let pid=e.dataset.addrecipe;let p=db.products.find(x=>x.id===pid);if(!p)return;if(!p.recipe)p.recipe=[];window.editingProduct=pid;window.recipeForProduct=pid;window.editingRecipeIdx=null;window.recipeDraftKind=null;overlay='recipeDialog';save();render()});
