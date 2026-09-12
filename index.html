@@ -325,7 +325,7 @@ async function loadMenuFromSupabase(){
   if(payR.error)throw payR.error;
   if(prodR.error)throw prodR.error;
   if(nbR.error)throw nbR.error;
-  db.categories=(catsR.data||[]).map(c=>({id:c.id,name:c.name,active:true}));
+  if(catsR.data&&catsR.data.length)db.categories=catsR.data.map(c=>({id:c.id,name:c.name,active:true}));
   try{
    // Busca o campo "active" das categorias à parte: se a coluna ainda não
    // existir na tabela categories do Supabase, essa consulta falha sozinha
@@ -338,10 +338,10 @@ async function loadMenuFromSupabase(){
   }catch(e){}
   const paMap={};
   (paR.data||[]).forEach(x=>{(paMap[x.product_id]=paMap[x.product_id]||[]).push({id:x.addon_id,max:x.max_qty})});
-  db.products=(prodR.data||[]).map(p=>({id:p.id,cat:p.category_id,name:p.name,desc:p.description||'',price:Number(p.price),oldPrice:Number(p.old_price)||0,stock:Number(p.stock),active:p.active,showStock:p.show_stock,type:p.type==='pi'?'pi':'pa',addons:paMap[p.id]||[],recipe:[],photo:p.photo||null}));
-  db.addons=(addonsR.data||[]).map(a=>({id:a.id,name:a.name,price:Number(a.price),stock:Number(a.stock),active:a.active,min:a.min_qty,max:a.max_qty}));
-  db.neighborhoods=(nbR.data||[]).map(n=>({id:n.id,name:n.name,fee:Number(n.fee),municipio:n.municipio||'',active:n.active!==false}));
-  db.payments=(payR.data||[]).map(p=>({id:p.id,name:p.name,fee:Number(p.fee),active:p.active,showClient:p.show_client}));
+  if(prodR.data&&prodR.data.length)db.products=prodR.data.map(p=>({id:p.id,cat:p.category_id,name:p.name,desc:p.description||'',price:Number(p.price),oldPrice:Number(p.old_price)||0,stock:Number(p.stock),active:p.active,showStock:p.show_stock,type:p.type==='pi'?'pi':'pa',addons:paMap[p.id]||[],recipe:[],photo:p.photo||null}));
+  if(addonsR.data&&addonsR.data.length)db.addons=addonsR.data.map(a=>({id:a.id,name:a.name,price:Number(a.price),stock:Number(a.stock),active:a.active,min:a.min_qty,max:a.max_qty}));
+  if(nbR.data&&nbR.data.length)db.neighborhoods=nbR.data.map(n=>({id:n.id,name:n.name,fee:Number(n.fee),municipio:n.municipio||'',active:n.active!==false}));
+  if(payR.data&&payR.data.length)db.payments=payR.data.map(p=>({id:p.id,name:p.name,fee:Number(p.fee),active:p.active,showClient:p.show_client}));
   try{
    // Busca a foto dos adicionais à parte: se a coluna "photo" ainda não
    // existir na tabela addons do Supabase, essa consulta falha sozinha
@@ -367,7 +367,7 @@ async function loadMenuFromSupabase(){
    // tabela "package_types" ainda não existir no Supabase, essa consulta
    // falha sozinha sem derrubar o restante do carregamento do cardápio.
    const pkgTypesR=await sb.from('package_types').select('id,name');
-   if(!pkgTypesR.error&&pkgTypesR.data){
+   if(!pkgTypesR.error&&pkgTypesR.data&&pkgTypesR.data.length){
     db.packageTypes=pkgTypesR.data.map(t=>({id:t.id,name:t.name}));
    }
   }catch(e){}
@@ -386,7 +386,7 @@ async function loadMenuFromSupabase(){
    // existir no Supabase, essa consulta falha sozinha sem derrubar o
    // restante do carregamento do cardápio.
    const ingR=await sb.from('ingredients').select('id,name,unit,stock,cost,active');
-   if(!ingR.error&&ingR.data){
+   if(!ingR.error&&ingR.data&&ingR.data.length){
     db.ingredients=ingR.data.map(m=>({id:m.id,name:m.name,unit:m.unit,stock:Number(m.stock)||0,cost:Number(m.cost)||0,active:m.active!==false}));
    }
   }catch(e){}
