@@ -1611,7 +1611,7 @@ function renderEditProductModal(){
 }
 function downloadProductTemplate(){
  if(typeof XLSX==='undefined'){alert('Não foi possível carregar a biblioteca de planilhas. Verifique sua conexão com a internet e tente novamente.');return}
- const rows=[['Categoria','Nome','Preço','Estoque','Descrição','Exibir estoque','Tipo'],['Hambúrgueres','Cheeseburger Duplo','29.90','20','Pão brioche, dois blends e queijo','Não','PA']];
+ const rows=[['Categoria','Nome','Preço','Estoque','Descrição','Exibir estoque','Tipo','Classificação'],['Hambúrgueres','Cheeseburger Duplo','29.90','20','Pão brioche, dois blends e queijo','Não','PA',''],['Bebidas','Coca-Cola Lata 350ml','6.00','40','Refrigerante gelado','Não','PA','Lata'],['Bebidas','Coca-Cola PET 2L','12.00','15','Refrigerante gelado','Não','PA','PET']];
  const ws=XLSX.utils.aoa_to_sheet(rows),wb=XLSX.utils.book_new();
  XLSX.utils.book_append_sheet(wb,ws,'Produtos');
  XLSX.writeFile(wb,'modelo-produtos.xlsx');
@@ -1628,6 +1628,13 @@ function findOrCreateCategoryByName(name){
  let c=db.categories.find(x=>x.name.toLowerCase()===name.toLowerCase());
  if(!c){c={id:id('cat'),name,active:true};db.categories.push(c)}
  return c;
+}
+function findOrCreatePackageTypeByName(name){
+ name=String(name||'').trim();if(!name)return null;
+ db.packageTypes=db.packageTypes||[];
+ let t=db.packageTypes.find(x=>x.name.toLowerCase()===name.toLowerCase());
+ if(!t){t={id:uuidLike(),name};db.packageTypes.push(t)}
+ return t;
 }
 function handlePackageTypeSelect(selectEl){
  if(!selectEl||selectEl.value!=='__new__')return;
@@ -1664,14 +1671,16 @@ function importProductsFromSheet(file){
     const showStock=['sim','s','true','1','yes'].includes(showStockRaw);
     const typeRaw=String(keyMap['tipo']||'').trim().toLowerCase();
     const type=['pi','produto intermediário','produto intermediario'].includes(typeRaw)?'pi':'pa';
+    const pkgName=String(keyMap['classificação']||keyMap['classificacao']||'').trim();
+    const pkg=pkgName?findOrCreatePackageTypeByName(pkgName):null;
     if(!name||!(price>0)||!catName){skipped++;return}
     const cat=findOrCreateCategoryByName(catName);
     const existing=findExistingProductByNameCat(name,cat.id);
     if(existing){
-     existing.name=name;existing.desc=desc;existing.price=price;existing.stock=stock;existing.type=type;existing.showStock=showStock;
+     existing.name=name;existing.desc=desc;existing.price=price;existing.stock=stock;existing.type=type;existing.showStock=showStock;if(pkg)existing.packageType=pkg.id;
      updated++;
     }else{
-     db.products.push({id:id('p'),cat:cat.id,name,desc,price,stock,type,active:true,showStock,addons:[]});
+     db.products.push({id:id('p'),cat:cat.id,name,desc,price,stock,type,active:true,showStock,addons:[],packageType:pkg?pkg.id:''});
      added++;
     }
    });
@@ -1990,7 +1999,7 @@ function renderStock(){
 }
 function renderCatalogoUnificado(){
  return `<div class="row" style="justify-content:flex-end;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px"><button class="primary" id="openNewProduct" style="width:auto;padding:10px 18px">Novo produto +</button></div>
-<div class="cardbox"><h3>Importar produtos via planilha (Excel)</h3><p class="meta">Cadastre vários produtos de uma vez com um arquivo .xlsx ou .csv com as colunas Categoria, Nome, Preço, Estoque, Descrição, Exibir estoque (Sim/Não) e Tipo (PA ou PI, opcional — padrão PA se vazio). Categorias novas são criadas automaticamente. Se já existir um produto com o mesmo nome na mesma categoria, os dados dele são atualizados (preço, estoque, descrição etc.) em vez de criar um produto duplicado. Produtos importados como PI não precisam de receita aqui: adicione a receita depois em Cadastro › Receitas.</p><div class="row" style="margin-top:9px;flex-wrap:wrap;gap:8px"><button type="button" class="btn" id="downloadImportTemplate">⬇️ Baixar modelo</button><input type="file" id="importProductsFile" accept=".xlsx,.xls,.csv" style="flex:1;min-width:180px;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:8px;color:var(--cream)"></div><button type="button" class="primary" id="importProductsBtn" style="margin-top:10px">📥 Importar planilha</button>${window.importMsg?`<p class="${window.importMsgType==='err'?'err':'ok'}" style="margin-top:8px">${esc(window.importMsg)}</p>`:''}</div>
+<div class="cardbox"><h3>Importar produtos via planilha (Excel)</h3><p class="meta">Cadastre vários produtos de uma vez com um arquivo .xlsx ou .csv com as colunas Categoria, Nome, Preço, Estoque, Descrição, Exibir estoque (Sim/Não), Tipo (PA ou PI, opcional — padrão PA se vazio) e Classificação (opcional — ex.: Lata, PET; cria a classificação automaticamente se ainda não existir, e agrupa/ordena os produtos por ela no cardápio do cliente). Categorias novas são criadas automaticamente. Se já existir um produto com o mesmo nome na mesma categoria, os dados dele são atualizados (preço, estoque, descrição etc.) em vez de criar um produto duplicado — deixar a Classificação em branco numa atualização mantém a que já estava cadastrada. Produtos importados como PI não precisam de receita aqui: adicione a receita depois em Cadastro › Receitas.</p><div class="row" style="margin-top:9px;flex-wrap:wrap;gap:8px"><button type="button" class="btn" id="downloadImportTemplate">⬇️ Baixar modelo</button><input type="file" id="importProductsFile" accept=".xlsx,.xls,.csv" style="flex:1;min-width:180px;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:8px;color:var(--cream)"></div><button type="button" class="primary" id="importProductsBtn" style="margin-top:10px">📥 Importar planilha</button>${window.importMsg?`<p class="${window.importMsgType==='err'?'err':'ok'}" style="margin-top:8px">${esc(window.importMsg)}</p>`:''}</div>
 ${renderStockGeral()}`;
 }
 function lastSupplierNameFor(type,item){
