@@ -1791,7 +1791,7 @@ function renderReports(){
  <div class="report-panel report-entrega" style="display:${window.reportView==='entrega'?'block':'none'}"><div class="cardbox"><h3>Relatório de Entregas</h3><div class="grid2"><div class="field"><label>Data inicial</label><input id="rfFromEntrega" type="date" value="${f.from}"></div><div class="field"><label>Data final</label><input id="rfToEntrega" type="date" value="${f.to}"></div><div class="field"><label>Entregador</label><select id="rfRider"><option value="">Todos os entregadores</option>${db.riders.map(r=>`<option value="${r.id}" ${deliveryRider===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}</select></div></div><button class="primary" id="applyDeliveryReport">Aplicar filtros</button></div><div class="metric"><div><span class="meta">Taxas de entrega no período</span><b>${money(deliveryOrders.reduce((sum,o)=>sum+Number(o.deliveryFee||0),0))}</b></div><div><span class="meta">Entregas concluídas</span><b>${deliveryOrders.length}</b></div></div><div class="cardbox"><h3>Taxa por entregador</h3>${Object.entries(deliveryByRider).map(([rid,val])=>`<div class="itemrow"><span>${esc(db.riders.find(r=>r.id===rid)?.name||'Sem entregador')}</span><b>${money(val)}</b></div>`).join('')||'<span class="meta">Nenhuma entrega concluída no período.</span>'}</div></div><div class="report-panel report-estoque" style="display:${window.reportView==='estoque_valor'?'block':'none'}"><div class="cardbox"><h3>Valor estimado do estoque</h3><div class="metric"><div><span class="meta">Estoque atual</span><b>${money(inv)}</b></div></div><p class="meta">Estimativa calculada pela quantidade em estoque multiplicada pelo preço cadastrado.</p></div><div class="cardbox"><h3>Produtos</h3>${db.products.map(p=>{const st=getProductStock(p);return `<div class="itemrow"><div class="row"><b>${esc(p.name)}</b><span class="${st?'':'sold'}">${st} un.</span></div><div class="meta">Valor unitário: ${money(p.price)} · Total: ${money(st*p.price)}</div></div>`}).join('')||'<span class="meta">Nenhum produto cadastrado.</span>'}</div><div class="cardbox"><h3>Adicionais</h3>${db.addons.map(a=>`<div class="itemrow"><div class="row"><b>${esc(a.name)}</b><span class="${a.stock?'':'sold'}">${a.stock} un.</span></div><div class="meta">Valor unitário: ${money(a.price)} · Total: ${money(a.stock*a.price)}</div></div>`).join('')||'<span class="meta">Nenhum adicional cadastrado.</span>'}</div></div><div class="report-panel report-inadimplentes" style="display:${window.reportView==='inadimplentes'?'block':'none'}"><div class="cardbox"><h3>Inadimplentes — Fiado</h3>${credit.map(o=>`<div class="itemrow"><b>${esc(o.customer.name)}</b> · ${money(o.total)} · ${o.id} <button class="btn" data-paid="${o.id}">Marcar como pago</button></div>`).join('')||'<span class="meta">Nenhum cliente inadimplente.</span>'}</div></div>`;
 }
 
-const STOCK_SAIDA_REASONS=['Falta','Avaria','Desperdício','Outros'];
+const STOCK_SAIDA_REASONS=['Falta','Avaria','Desperdício','Contagem','Outros'];
 const MOVE_TYPES=[{code:4,label:'Entrada de Fornecedor'},{code:5,label:'Saída via pedido'},{code:6,label:'Entrada Manual'},{code:7,label:'Saída Por perda'},{code:8,label:'Outros'}];
 function fmtDate(ymd){if(!ymd)return '—';const p=String(ymd).split('-');if(p.length!==3)return esc(ymd);return `${p[2]}/${p[1]}/${p[0]}`}
 function paymentConditionLabel(c){return c==='boleto'?'Boleto':(c==='avista'?'À vista':'')}
@@ -1837,6 +1837,7 @@ function stockItemUnit(type,item){return type==='produto'?'un':(item.unit||'')}
 function itemDraftFor(kind){
  if(kind==='entrada'){window.stockEntradaDraft=window.stockEntradaDraft||{itemType:'',itemId:'',itemSearch:'',qty:1,unitPrice:'',open:false,note:'',nfNumber:'',supplierId:'',supplierSearch:'',supplierOpen:false,manual:false,manualNote:'',paymentCondition:'',paymentMethod:'',paymentDueDate:'',items:[]};return window.stockEntradaDraft}
  if(kind==='mov'){window.movItemDraft=window.movItemDraft||{itemType:'',itemId:'',itemSearch:'',open:false};return window.movItemDraft}
+ if(kind==='contagem'){window.contagemDraft=window.contagemDraft||{itemType:'',itemId:'',itemSearch:'',qty:'',open:false};return window.contagemDraft}
  window.stockSaidaDraft=window.stockSaidaDraft||{itemType:'',itemId:'',itemSearch:'',qty:1,note:'',reason:'Falta',open:false};return window.stockSaidaDraft;
 }
 function groupEntriesByNf(movs){
@@ -1962,6 +1963,31 @@ function renderEstoqueEntradas(){
  </div>
  <div class="cardbox"><h3>Últimas entradas</h3>${groups.map(g=>`<div class="itemrow"><div class="row"><b>${g.nfNumber?'📄 NF '+esc(g.nfNumber):(g.manual?'✍️ Entrada manual':'⬇️ Entrada')}</b><span class="price">${money(g.items.reduce((s,x)=>s+(Number(x.qty)||0)*(Number(x.unitPrice)||0),0))}</span></div><div class="meta">${fmtDT(g.date)}${g.supplierName?' · Fornecedor: '+esc(g.supplierName):''}${g.note?' · '+esc(g.note):''}</div>${g.paymentCondition?`<div class="meta">💳 ${esc(paymentInfoLine(g))}</div>`:''}${g.items.map(x=>`<div class="meta" style="margin-left:10px">↳ ${x.kind==='produto'?'🍔':'🧪'} ${esc(x.itemName)} · ${x.qty} ${esc(x.unit||(x.kind==='produto'?'un':''))} × ${money(x.unitPrice||0)} = ${money((Number(x.qty)||0)*(Number(x.unitPrice)||0))}</div>`).join('')}</div>`).join('')||'<span class="meta">Nenhuma entrada registrada.</span>'}</div>`;
 }
+function renderContagem(){
+ const d=itemDraftFor('contagem');
+ const selectedItem=findStockItem(d.itemType,d.itemId);
+ return `<div class="cardbox">
+ <h3>🔢 Contagem de estoque</h3>
+ <p class="meta" style="margin:6px 0 12px">Feito pra usar pelo celular andando pela loja: escolha o produto ou matéria-prima, digite a quantidade que você contou fisicamente (na geladeira, na prateleira etc.) e confirme — o saldo é ajustado sozinho e a tela já fica pronta pro próximo item.</p>
+ ${window.contagemLastMsg?`<p class="ok" style="margin-bottom:10px">${esc(window.contagemLastMsg)}</p>`:''}
+ <div class="field" id="stockPickerWrap_contagem" style="position:relative">
+  <label>Produto ou matéria-prima</label>
+  <input id="stockSearch_contagem" value="${esc(d.itemSearch||'')}" placeholder="🔍 Digite o nome..." autocomplete="off">
+  ${itemPickerResultsHtml('contagem')}
+ </div>
+ <div id="stockPickerBelow_contagem">${itemPickerBelowHtml('contagem')}</div>
+ ${selectedItem?`<div class="field" style="margin-top:10px"><label>Quantidade contada agora (estoque atual: ${stockItemStock(d.itemType,selectedItem)} ${esc(stockItemUnit(d.itemType,selectedItem))})</label><input autocomplete="off" id="contagemQty" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Ex.: 8" value="${esc(d.qty??'')}"></div>`:''}
+ ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
+ <button class="primary" id="confirmContagem" style="margin-top:10px">✅ Confirmar contagem</button>
+ </div>
+ <div class="cardbox"><h3>Últimas contagens</h3>${renderRecentContagens()}</div>`;
+}
+function renderRecentContagens(){
+ const recentMat=(db.materiaMovements||[]).filter(m=>m.reason==='Contagem').map(m=>({...m,kind:'materia',itemName:m.ingredientName}));
+ const recentProd=(db.stockMovements||[]).filter(m=>m.reason==='Contagem').map(m=>({...m,kind:'produto',itemName:m.productName}));
+ const recent=[...recentMat,...recentProd].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,20);
+ return recent.map(m=>`<div class="itemrow"><div class="row"><b>${m.type==='entrada'?'⬆️':'⬇️'} ${m.kind==='produto'?'🍔':'🧪'} ${esc(m.itemName)}</b><span class="${m.type==='entrada'?'ok':'sold'}">${m.type==='entrada'?'+':'-'}${m.qty} ${esc(m.unit||(m.kind==='produto'?'un':''))}</span></div><div class="meta">${fmtDT(m.date)}</div></div>`).join('')||'<span class="meta">Nenhuma contagem registrada ainda.</span>';
+}
 function renderEstoqueSaidas(){
  const d=itemDraftFor('saida');
  const recentMat=(db.materiaMovements||[]).filter(m=>m.type==='saida').map(m=>({...m,kind:'materia',itemName:m.ingredientName}));
@@ -1992,10 +2018,11 @@ function renderStock(){
  return `<h2>Produtos e Estoque</h2>
  <div class="chips" style="margin-bottom:14px">
   <button type="button" class="chip ${view==='geral'?'active':''}" data-estoque-view="geral">📦 Catálogo</button>
+  <button type="button" class="chip ${view==='contagem'?'active':''}" data-estoque-view="contagem">🔢 Contagem</button>
   <button type="button" class="chip ${view==='entradas'?'active':''}" data-estoque-view="entradas">⬇️ Entradas</button>
   <button type="button" class="chip ${view==='saidas'?'active':''}" data-estoque-view="saidas">⬆️ Saídas</button>
  </div>
- ${view==='entradas'?renderEstoqueEntradas():view==='saidas'?renderEstoqueSaidas():renderCatalogoUnificado()}`;
+ ${view==='entradas'?renderEstoqueEntradas():view==='saidas'?renderEstoqueSaidas():view==='contagem'?renderContagem():renderCatalogoUnificado()}`;
 }
 function renderCatalogoUnificado(){
  return `<div class="row" style="justify-content:flex-end;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px"><button class="primary" id="openNewProduct" style="width:auto;padding:10px 18px">Novo produto +</button></div>
@@ -3021,6 +3048,38 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
   const old=document.getElementById('stockItemResults_saida');if(old)old.outerHTML=itemPickerResultsHtml('saida');
   const below=document.getElementById('stockPickerBelow_saida');if(below)below.innerHTML=itemPickerBelowHtml('saida');
   bindItemPickerResults();
+ });
+ document.getElementById('stockSearch_contagem')?.addEventListener('input',e=>{
+  const d=itemDraftFor('contagem');d.itemType='';d.itemId='';d.itemSearch=e.target.value;d.qty='';d.open=true;
+  const old=document.getElementById('stockItemResults_contagem');if(old)old.outerHTML=itemPickerResultsHtml('contagem');
+  const below=document.getElementById('stockPickerBelow_contagem');if(below)below.innerHTML=itemPickerBelowHtml('contagem');
+  bindItemPickerResults();
+  render();
+ });
+ document.getElementById('contagemQty')?.addEventListener('input',e=>{itemDraftFor('contagem').qty=e.target.value});
+ document.getElementById('confirmContagem')?.addEventListener('click',()=>{
+  const d=itemDraftFor('contagem');
+  const item=findStockItem(d.itemType,d.itemId);
+  if(!item){formErr='Escolha um produto ou matéria-prima antes de confirmar.';render();return}
+  const counted=Number(document.getElementById('contagemQty')?.value);
+  if(!(counted>=0)){formErr='Informe uma quantidade válida (0 ou mais).';render();return}
+  const current=stockItemStock(d.itemType,item);
+  const diff=+(counted-current).toFixed(3);
+  const now=new Date().toISOString();
+  const unit=stockItemUnit(d.itemType,item);
+  if(diff!==0){
+   item.stock=counted;
+   if(d.itemType==='produto'){
+    db.stockMovements.push({id:id('mov'),type:diff>0?'entrada':'saida',date:now,productId:item.id,productName:item.name,unit:'un',qty:Math.abs(diff),unitPrice:0,reason:'Contagem',manual:true,note:'Ajuste por contagem física'});
+   }else{
+    db.materiaMovements.push({id:id('mmov'),type:diff>0?'entrada':'saida',date:now,ingredientId:item.id,ingredientName:item.name,unit:item.unit,qty:Math.abs(diff),unitPrice:Number(item.cost)||0,reason:'Contagem',manual:true,note:'Ajuste por contagem física'});
+   }
+   window.contagemLastMsg=`✅ ${item.name}: atualizado para ${counted} ${unit} (${diff>0?'+':''}${diff} ${unit}).`;
+  }else{
+   window.contagemLastMsg=`✅ ${item.name}: contagem confere, sem alteração.`;
+  }
+  window.contagemDraft={itemType:'',itemId:'',itemSearch:'',qty:'',open:false};
+  formErr='';save();render();
  });
  document.getElementById('registerStockSaida')?.addEventListener('click',()=>{
   const d=itemDraftFor('saida');
