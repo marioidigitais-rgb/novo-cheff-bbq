@@ -1976,7 +1976,7 @@ function renderContagem(){
   ${itemPickerResultsHtml('contagem')}
  </div>
  <div id="stockPickerBelow_contagem">${itemPickerBelowHtml('contagem')}</div>
- ${selectedItem?`<div class="field" style="margin-top:10px"><label>Quantidade contada agora (estoque atual: ${stockItemStock(d.itemType,selectedItem)} ${esc(stockItemUnit(d.itemType,selectedItem))})</label><input autocomplete="off" id="contagemQty" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Ex.: 8" value="${esc(d.qty??'')}"></div>`:''}
+ ${selectedItem?`<div class="field" style="margin-top:10px"><label>Quantidade contada agora (estoque atual: ${stockItemStock(d.itemType,selectedItem)} ${esc(stockItemUnit(d.itemType,selectedItem))})</label><input autocomplete="off" id="contagemQty" type="number" min="0" step="${d.itemType==='produto'?'1':'0.01'}" inputmode="${d.itemType==='produto'?'numeric':'decimal'}" placeholder="Ex.: 8" value="${esc(d.qty??'')}"></div>`:''}
  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  <button class="primary" id="confirmContagem" style="margin-top:10px">✅ Confirmar contagem</button>
  </div>
