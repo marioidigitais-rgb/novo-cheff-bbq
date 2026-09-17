@@ -22,6 +22,7 @@
 .pdv-product-grid{flex:1;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
 @media(max-width:600px){.pdv-modal-layout{flex-direction:column}.pdv-cat-list{position:static;width:100%;flex-direction:row;flex-wrap:wrap;overflow-x:auto}.pdv-cat-list button{width:auto;white-space:nowrap}}
 .hours-day{padding:13px 0;border-bottom:1px solid var(--line)}
+.sync-status{font-size:10px;color:var(--dim);display:flex;align-items:center;padding:6px 8px;white-space:nowrap}
 .hours-day:last-child{border-bottom:none}
 .hours-day-head{display:flex;justify-content:space-between;align-items:center}
 .hours-day-times{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.print-command{display:none}@media print{body *{visibility:hidden!important}.print-command,.print-command *{visibility:visible!important}.print-command{display:block;position:absolute;left:0;top:0;width:80mm;padding:4mm;background:#fff;color:#000;font:12px monospace}.print-command h2{text-align:center;font-size:16px;margin-bottom:5px}.print-command .line{border-top:1px dashed #000;margin:5px 0}.print-command .total{font-size:14px;font-weight:bold}.print-command .small{font-size:10px}} 
@@ -345,6 +346,16 @@ async function loadMenuFromSupabase(){
     db.categories.forEach(c=>{if(activeMap[c.id]!==undefined)c.active=activeMap[c.id]!==false});
    }
   }catch(e){}
+  try{
+   // Busca o campo "upsell" das categorias à parte: se a coluna ainda não
+   // existir na tabela categories do Supabase, essa consulta falha sozinha
+   // sem derrubar o restante do carregamento do cardápio.
+   const catUpsellR=await sb.from('categories').select('id,upsell');
+   if(!catUpsellR.error&&catUpsellR.data){
+    const upsellMap={};catUpsellR.data.forEach(x=>{upsellMap[x.id]=x.upsell});
+    db.categories.forEach(c=>{if(upsellMap[c.id]!==undefined)c.upsell=!!upsellMap[c.id]});
+   }
+  }catch(e){}
   const paMap={};
   (paR.data||[]).forEach(x=>{(paMap[x.product_id]=paMap[x.product_id]||[]).push({id:x.addon_id,max:x.max_qty})});
   if(prodR.data&&prodR.data.length){
@@ -414,6 +425,15 @@ async function loadMenuFromSupabase(){
     const byProduct={};
     recR.data.forEach(r=>{(byProduct[r.product_id]=byProduct[r.product_id]||[]).push({id:r.id,kind:r.kind==='pi'?'pi':'materia',ingredientId:r.kind==='pi'?undefined:r.ingredient_id,productId:r.kind==='pi'?r.component_product_id:undefined,qty:Number(r.qty)||0})});
     db.products.forEach(p=>{if(byProduct[p.id])p.recipe=byProduct[p.id]});
+   }
+  }catch(e){}
+  try{
+   // Busca os cupons à parte: se a tabela "coupons" ainda não existir no
+   // Supabase, essa consulta falha sozinha sem derrubar o restante do
+   // carregamento do cardápio.
+   const couR=await sb.from('coupons').select('id,code,type,value,active,max_uses,used_count,expires_at');
+   if(!couR.error&&couR.data&&couR.data.length){
+    db.coupons=couR.data.map(c=>({id:c.id,code:String(c.code||'').toUpperCase(),type:c.type==='fixed'?'fixed':'percent',value:Number(c.value)||0,active:c.active!==false,maxUses:c.max_uses||null,usedCount:Number(c.used_count)||0,expiresAt:c.expires_at||''}));
    }
   }catch(e){}
   const hoursObj={};(hoursR.data||[]).forEach(h=>{hoursObj[h.weekday]={open:(h.open_time||'').slice(0,5),close:(h.close_time||'').slice(0,5),active:h.active}});
@@ -498,6 +518,7 @@ function __seedSyncSnapshot(){
  __snapCommit('products',db.products);
  __snapCommit('packageTypes',db.packageTypes||[]);
  __snapCommit('ingredients',db.ingredients);
+ __snapCommit('coupons',db.coupons||[]);
  __snapCommit('recipeItems',(()=>{const rows=[];db.products.forEach(p=>{(p.recipe||[]).forEach(r=>{rows.push({id:r.id,product_id:p.id,kind:r.kind==='pi'?'pi':'materia',ingredient_id:r.kind==='pi'?null:(r.ingredientId||null),component_product_id:r.kind==='pi'?(r.productId||null):null,qty:Number(r.qty)||0})})});return rows})());
  __snapCommit('addons',db.addons);
  __snapCommit('neighborhoods',db.neighborhoods);
@@ -526,17 +547,23 @@ async function __upsertAndPrune(table,rows,idField){
 }
 async function syncCategoriesToSupabase(){
  if(__snapEquals('categories',db.categories))return;
- const rows=db.categories.map((c,i)=>({id:c.id,name:c.name,sort_order:i,active:c.active!==false}));
+ const rows=db.categories.map((c,i)=>({id:c.id,name:c.name,sort_order:i,active:c.active!==false,upsell:!!c.upsell}));
  try{
   await __upsertAndPrune('categories',rows);
  }catch(e){
-  // A coluna "active" pode não existir ainda na tabela categories do
-  // Supabase — tenta de novo sem ela pra não travar a sincronização do
-  // nome/ordem das categorias. Rode no SQL editor do Supabase:
-  // alter table categories add column if not exists active boolean default true;
-  console.error('Falha ao sincronizar categorias com o campo "active" — tentando novamente sem ele.',e);
-  const fallback=db.categories.map((c,i)=>({id:c.id,name:c.name,sort_order:i}));
-  await __upsertAndPrune('categories',fallback);
+  try{
+   // A coluna "upsell" pode não existir ainda — tenta sem ela.
+   await __upsertAndPrune('categories',rows.map(({upsell,...r})=>r));
+  }catch(e2){
+   // A coluna "active" também pode não existir ainda na tabela categories
+   // do Supabase — tenta de novo sem nenhuma das duas, pra não travar a
+   // sincronização do nome/ordem das categorias. Rode no SQL editor:
+   // alter table categories add column if not exists active boolean default true;
+   // alter table categories add column if not exists upsell boolean default false;
+   console.error('Falha ao sincronizar categorias com os campos novos — tentando novamente sem eles.',e2);
+   const fallback=db.categories.map((c,i)=>({id:c.id,name:c.name,sort_order:i}));
+   await __upsertAndPrune('categories',fallback);
+  }
  }
  __snapCommit('categories',db.categories);
 }
@@ -554,13 +581,18 @@ async function syncAddonsToSupabase(){
 }
 async function syncProductsToSupabase(){
  if(__snapEquals('products',db.products))return;
- const rows=db.products.map(p=>({id:p.id,category_id:p.cat,name:p.name,description:p.desc,price:p.price,old_price:p.oldPrice,stock:p.stock,active:p.active,show_stock:p.showStock,type:p.type,photo:p.photo||null,package_type:p.packageType||null}));
+ const rows=db.products.map(p=>({id:p.id,category_id:p.cat,name:p.name,description:p.desc,price:p.price,old_price:p.oldPrice,stock:p.stock,active:p.active,show_stock:p.showStock,type:p.type,photo:p.photo||null,package_type:p.packageType||null,low_stock_threshold:p.lowStockThreshold||null}));
  try{
   await __upsertAndPrune('products',rows);
  }catch(e){
-  // Se a coluna "package_type" ainda não existir na tabela products do
-  // Supabase, tenta de novo sem ela, pra não travar a sincronização do restante.
-  await __upsertAndPrune('products',rows.map(({package_type,...r})=>r));
+  try{
+   // Se a coluna "low_stock_threshold" ainda não existir, tenta sem ela.
+   await __upsertAndPrune('products',rows.map(({low_stock_threshold,...r})=>r));
+  }catch(e2){
+   // Se "package_type" também não existir, tenta sem as duas, pra não
+   // travar a sincronização do restante.
+   await __upsertAndPrune('products',rows.map(({package_type,low_stock_threshold,...r})=>r));
+  }
  }
  // a relação produto × adicional é sempre derivada do que está nos
  // produtos agora, então é mais simples apagar tudo e recriar do zero.
@@ -587,14 +619,32 @@ async function syncPackageTypesToSupabase(){
 async function syncIngredientsToSupabase(){
  if(__snapEquals('ingredients',db.ingredients))return;
  try{
-  const rows=db.ingredients.map(m=>({id:m.id,name:m.name,unit:m.unit,stock:m.stock,cost:m.cost,active:m.active!==false}));
-  await __upsertAndPrune('ingredients',rows);
+  const rows=db.ingredients.map(m=>({id:m.id,name:m.name,unit:m.unit,stock:m.stock,cost:m.cost,active:m.active!==false,low_stock_threshold:m.lowStockThreshold||null}));
+  try{
+   await __upsertAndPrune('ingredients',rows);
+  }catch(e){
+   // A coluna "low_stock_threshold" pode não existir ainda — tenta de novo sem ela.
+   await __upsertAndPrune('ingredients',rows.map(({low_stock_threshold,...r})=>r));
+  }
   __snapCommit('ingredients',db.ingredients);
  }catch(e){
   // A tabela "ingredients" pode não existir ainda no Supabase — os dados
   // continuam salvos neste aparelho e a sincronização é tentada novamente
   // na próxima alteração, sem travar a sincronização do restante.
   console.error('Não foi possível sincronizar as matérias-primas com o Supabase:',e);
+ }
+}
+async function syncCouponsToSupabase(){
+ if(__snapEquals('coupons',db.coupons||[]))return;
+ try{
+  const rows=(db.coupons||[]).map(c=>({id:c.id,code:c.code,type:c.type,value:c.value,active:c.active!==false,max_uses:c.maxUses||null,used_count:c.usedCount||0,expires_at:c.expiresAt||null}));
+  await __upsertAndPrune('coupons',rows);
+  __snapCommit('coupons',db.coupons||[]);
+ }catch(e){
+  // A tabela "coupons" pode não existir ainda no Supabase — os dados
+  // continuam salvos neste aparelho e a sincronização é tentada novamente
+  // na próxima alteração, sem travar a sincronização do restante.
+  console.error('Não foi possível sincronizar os cupons com o Supabase:',e);
  }
 }
 async function syncProductRecipesToSupabase(){
@@ -668,19 +718,32 @@ async function syncAllToSupabase(){
  await syncHoursToSupabase();
  await syncTablesToSupabase();
  await syncSettingsToSupabase();
+ await syncCouponsToSupabase();
  for(const o of (db.orders||[])){
   if(!__snapEquals('order:'+o.id,o)){
    await saveOrderToSupabase(o);
   }
  }
 }
+window.__syncStatus=window.__syncStatus||'ok';
+function updateSyncStatusUI(){
+ const el=document.getElementById('syncStatusIndicator');
+ if(!el)return;
+ const map={ok:{icon:'🟢',text:'Sincronizado'},pending:{icon:'🟡',text:'Alterações pendentes'},syncing:{icon:'🟡',text:'Sincronizando…'},error:{icon:'🔴',text:'Falha ao sincronizar'}};
+ const s=map[window.__syncStatus]||map.ok;
+ el.textContent=s.icon+' '+s.text;
+ el.title=window.__syncStatus==='error'?'A última tentativa de sincronizar com o Supabase falhou. Os dados continuam salvos neste aparelho e serão reenviados na próxima alteração.':'Status da sincronização com o Supabase';
+}
 let __syncTimer=null;
 function scheduleSupabaseSync(){
+ window.__syncStatus='pending';updateSyncStatusUI();
  clearTimeout(__syncTimer);
  __syncTimer=setTimeout(()=>{
   window.__syncingNow=true;
+  window.__syncStatus='syncing';updateSyncStatusUI();
   syncAllToSupabase()
-   .catch(e=>console.error('Falha ao sincronizar com o Supabase (os dados continuam salvos neste aparelho e serão reenviados na próxima alteração):',e))
+   .then(()=>{window.__syncStatus='ok';updateSyncStatusUI()})
+   .catch(e=>{window.__syncStatus='error';updateSyncStatusUI();console.error('Falha ao sincronizar com o Supabase (os dados continuam salvos neste aparelho e serão reenviados na próxima alteração):',e)})
    .finally(()=>{clearTimeout(window.__syncingNowTimer);window.__syncingNowTimer=setTimeout(()=>{window.__syncingNow=false},2500)});
  },1200);
 }
@@ -718,6 +781,7 @@ function startSupabaseRealtime(){
    .on('postgres_changes',{event:'*',schema:'public',table:'ingredients'},__scheduleRealtimeReload)
    .on('postgres_changes',{event:'*',schema:'public',table:'package_types'},__scheduleRealtimeReload)
    .on('postgres_changes',{event:'*',schema:'public',table:'product_recipe_items'},__scheduleRealtimeReload)
+   .on('postgres_changes',{event:'*',schema:'public',table:'coupons'},__scheduleRealtimeReload)
    .subscribe();
  }catch(e){}
  try{
@@ -823,6 +887,11 @@ function productAvgCost(pid){
   return 0;
  }
 }
+function stockAlertLevel(currentStock,threshold){
+ if(currentStock<=0)return 'critical';
+ if(threshold>0&&currentStock<=threshold)return 'low';
+ return null;
+}
 function getProductStock(p){
  try{
   if(!p)return 0;
@@ -913,7 +982,7 @@ setInterval(checkNewOrders,4000);
 window.addEventListener('storage',e=>{if(e.key===KEY)checkNewOrders()});
 function save(){localStorage.setItem(KEY,JSON.stringify(db));window.lastSeenOrderCount=db.orders.length;scheduleSupabaseSync()}
 async function load(){try{db=JSON.parse(localStorage.getItem(KEY))||structuredClone(DEFAULT)}catch(e){db=structuredClone(DEFAULT)}normalize();window.lastSeenOrderCount=db.orders.length;window.menuLoading=(route==='client');render();await loadMenuFromSupabase();normalize();if(window.supabaseMenuLoaded)__seedSyncSnapshot();window.menuLoading=false;render();startSupabaseRealtime()}
-function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.cancelamento??=DEFAULT.settings.messages.cancelamento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.categories??=structuredClone(DEFAULT.categories);db.categories.forEach(c=>{c.active=c.active!==false});db.products??=[];db.packageTypes??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.riders.forEach(r=>{r.active=r.active!==false;r.createdAt=r.createdAt||new Date().toISOString()});db.orders??=[];db.ingredients??=[];db.cash??={open:false,initial:0,movements:[]};db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.type=p.type==='pi'?'pi':'pa';p.packageType=p.packageType||'';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{id:r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{id:r&&r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true});db.ingredients.forEach(m=>{if(!isUuidLike(m.id)){const oldId=m.id,newId=uuidLike();m.id=newId;db.products.forEach(p=>{(p.recipe||[]).forEach(r=>{if(r.kind!=='pi'&&r.ingredientId===oldId)r.ingredientId=newId})})}});db.packageTypes.forEach(t=>{if(!isUuidLike(t.id)){const oldId=t.id,newId=uuidLike();t.id=newId;db.products.forEach(p=>{if(p.packageType===oldId)p.packageType=newId})}});db.payments.forEach(p=>{p.showClient??=true;p.fee=Number(p.fee)||0;p.feeFixed=Number(p.feeFixed)||0});
+function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.cancelamento??=DEFAULT.settings.messages.cancelamento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.categories??=structuredClone(DEFAULT.categories);db.categories.forEach(c=>{c.active=c.active!==false;c.upsell=!!c.upsell});db.products??=[];db.packageTypes??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.riders.forEach(r=>{r.active=r.active!==false;r.createdAt=r.createdAt||new Date().toISOString()});db.orders??=[];db.ingredients??=[];db.cash??={open:false,initial:0,movements:[]};db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.type=p.type==='pi'?'pi':'pa';p.packageType=p.packageType||'';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{id:r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{id:r&&r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true});db.ingredients.forEach(m=>{if(!isUuidLike(m.id)){const oldId=m.id,newId=uuidLike();m.id=newId;db.products.forEach(p=>{(p.recipe||[]).forEach(r=>{if(r.kind!=='pi'&&r.ingredientId===oldId)r.ingredientId=newId})})}});db.packageTypes.forEach(t=>{if(!isUuidLike(t.id)){const oldId=t.id,newId=uuidLike();t.id=newId;db.products.forEach(p=>{if(p.packageType===oldId)p.packageType=newId})}});db.payments.forEach(p=>{p.showClient??=true;p.fee=Number(p.fee)||0;p.feeFixed=Number(p.feeFixed)||0});db.coupons??=[];db.coupons.forEach(c=>{c.code=String(c.code||'').toUpperCase();c.type=c.type==='fixed'?'fixed':'percent';c.value=Number(c.value)||0;c.active??=true;c.usedCount=Number(c.usedCount)||0;c.maxUses=c.maxUses?Number(c.maxUses):null});
  db.customerSeq??=0;
  db.customers.forEach(c=>{
   c.addresses??=[];
@@ -1084,6 +1153,11 @@ function orderTypeLabel(order){return order.customer.delivery==='entrega'?'DELIV
 function labelStatus(s){return ({recebido:'Recebido',preparando:'Em preparo',aguardando_retirada:'Aguardando retirada',saiu_entrega:'Saiu para entrega',pronto:'Pronto para consumo',concluido:'Concluído',cancelado:'Cancelado'})[s]||s}
 function productAvailable(p){return !!(p&&p.active&&getProductStock(p)>0)}
 function cartSubtotal(){return cart.reduce((s,x)=>s+x.price*x.qty+(x.addons||[]).reduce((a,b)=>a+b.price*b.qty*x.qty,0),0)}
+function cartUpsellSuggestions(){
+ const cartCatIds=new Set(cart.map(x=>{const p=db.products.find(pp=>pp.id===x.productId);return p?p.cat:null}).filter(Boolean));
+ const missing=db.categories.filter(c=>c.active!==false&&c.upsell&&!cartCatIds.has(c.id));
+ return missing.map(c=>({category:c,products:db.products.filter(p=>p.cat===c.id&&p.type!=='pi'&&productAvailable(p)).slice(0,3)})).filter(x=>x.products.length>0);
+}
 function deliveryFee(){const d=window.checkoutDraft||{};return d.delivery==='entrega'?(db.neighborhoods.find(n=>n.id===d.neighborhood)?.fee||0):0}
 function paymentTotal(base,pid){const p=db.payments.find(x=>x.id===pid);return Math.max(0,base+(base*(p?.fee||0)/100)+Number(p?.feeFixed||0))}
 function render(){
@@ -1096,6 +1170,7 @@ function render(){
  }
  document.getElementById('app').innerHTML=(route==='client'&&window.menuLoading)?'<div style="padding:60px 20px;text-align:center;color:var(--cream);font:16px sans-serif"><div class="loading-spinner"></div>Carregando cardápio…</div>':(route==='client'?renderClient():renderAdmin());
  attach();
+ updateSyncStatusUI();
  if(focusInfo){
   const el=document.getElementById(focusInfo.id);
   if(el){
@@ -1148,6 +1223,7 @@ function renderOverlay(){
  if(overlay==='addNeighborhoodQuick')return renderAddNeighborhoodQuick();
  if(overlay==='addonDialog')return renderAddonDialog();
  if(overlay==='paymentMethodDialog')return renderPaymentMethodDialog();
+ if(overlay==='couponDialog')return renderCouponDialog();
  if(overlay==='neighborhoodDialog')return renderNeighborhoodDialog();
  if(overlay==='supplierDialog')return renderSupplierDialog();
  if(overlay==='newRider')return renderNewRiderDialog();
@@ -1157,7 +1233,7 @@ function renderOverlay(){
  if(overlay==='cashMove')return renderCashMoveDialog();
  if(overlay==='cashToggle')return renderCashToggleDialog();
  if(overlay==='addons'){const ctxT=(window.addingCtx||{}).type;const title=ctxT==='addAddon'?'Adicionar adicional ao item':'Monte seu item';return `<div class="overlay show"><div class="panel"><div class="head"><h2>${title}</h2><button class="x" id="closeOverlay">×</button></div>${renderAddonChooser()}</div></div>`}
- if(overlay==='cart'){return `<div class="overlay show"><div class="panel"><div class="head"><h2>Seu pedido</h2><button class="x" id="closeOverlay">×</button></div>${cart.map((x,i)=>{const p=db.products.find(pp=>pp.id===x.productId);const canAddon=productAllowsAddons(p);const rowTotal=x.price*x.qty+(x.addons||[]).reduce((s,a)=>s+a.price*a.qty*x.qty,0);const totalQtyForProduct=cart.filter(c=>c.productId===x.productId).reduce((s,c)=>s+c.qty,0);const itemAtMax=totalQtyForProduct>=getProductStock(p);const addonsHtml=(x.addons||[]).length?x.addons.map(a=>{const ad=db.addons.find(y=>y.id===a.id);const mx=productAddonMax(p,a.id);const last=a.qty<=1;const atMax=ad?a.qty>=mx||a.qty>=ad.stock:a.qty>=mx;return `<div class="addon-choice" style="margin-top:4px"><div><b>${esc(a.name)}</b><div class="meta">${money(a.price)} cada</div></div><div class="addon-counter"><button type="button" data-cart-addon-minus="${i}|${a.id}" aria-label="${last?'Remover':'Diminuir'} ${esc(a.name)}">${last?'✕':'−'}</button><span>${a.qty}</span><button type="button" data-cart-addon-plus="${i}|${a.id}" ${atMax?'disabled':''} aria-label="Aumentar ${esc(a.name)}">+</button></div></div>`}).join(''):'<div class="meta">Sem adicionais</div>';return `<div class="itemrow"><div class="row"><b>${x.qty}× ${esc(x.name)}</b><div class="addon-counter"><button type="button" data-item-minus="${i}" aria-label="${x.qty<=1?'Remover':'Diminuir'} ${esc(x.name)}">${x.qty<=1?'✕':'−'}</button><span>${x.qty}</span><button type="button" data-item-plus="${i}" ${itemAtMax?'disabled':''} aria-label="Aumentar ${esc(x.name)}">+</button></div></div><div class="meta">${money(x.price)} cada · Total do item: ${money(rowTotal)}</div>${addonsHtml}<div class="field" style="margin-top:6px"><textarea data-cart-note="${i}" rows="1" placeholder="Observação (opcional)">${esc(x.notes||'')}</textarea></div>${canAddon?`<button type="button" class="btn" data-cart-addaddon="${i}" style="margin-top:4px">+ Adicional</button>`:''}<button type="button" class="btn" data-rem="${i}" style="margin-top:4px">Remover item</button></div>`}).join('')||'<p class="meta">Carrinho vazio.</p>'}${cart.length?`<div class="field" style="margin-top:12px"><label>Observação geral (opcional)</label><textarea id="fCartNote" rows="2" placeholder="Ex.: observação sobre outros itens do pedido">${esc(typeof window.cartGeneralNote==='string'?window.cartGeneralNote:'')}</textarea></div>`:''}${formErr?`<div class="err">${esc(formErr)}</div>`:''}<div class="row" style="margin-top:12px"><b>Total</b><b class="price">${money(cartSubtotal())}</b></div>${cart.length?'<button class="primary" id="checkout">Finalizar pedido</button>':''}<button class="ghost" id="closeCart">Continuar comprando</button></div></div>`}
+ if(overlay==='cart'){return `<div class="overlay show"><div class="panel"><div class="head"><h2>Seu pedido</h2><button class="x" id="closeOverlay">×</button></div>${cart.map((x,i)=>{const p=db.products.find(pp=>pp.id===x.productId);const canAddon=productAllowsAddons(p);const rowTotal=x.price*x.qty+(x.addons||[]).reduce((s,a)=>s+a.price*a.qty*x.qty,0);const totalQtyForProduct=cart.filter(c=>c.productId===x.productId).reduce((s,c)=>s+c.qty,0);const itemAtMax=totalQtyForProduct>=getProductStock(p);const addonsHtml=(x.addons||[]).length?x.addons.map(a=>{const ad=db.addons.find(y=>y.id===a.id);const mx=productAddonMax(p,a.id);const last=a.qty<=1;const atMax=ad?a.qty>=mx||a.qty>=ad.stock:a.qty>=mx;return `<div class="addon-choice" style="margin-top:4px"><div><b>${esc(a.name)}</b><div class="meta">${money(a.price)} cada</div></div><div class="addon-counter"><button type="button" data-cart-addon-minus="${i}|${a.id}" aria-label="${last?'Remover':'Diminuir'} ${esc(a.name)}">${last?'✕':'−'}</button><span>${a.qty}</span><button type="button" data-cart-addon-plus="${i}|${a.id}" ${atMax?'disabled':''} aria-label="Aumentar ${esc(a.name)}">+</button></div></div>`}).join(''):'<div class="meta">Sem adicionais</div>';return `<div class="itemrow"><div class="row"><b>${x.qty}× ${esc(x.name)}</b><div class="addon-counter"><button type="button" data-item-minus="${i}" aria-label="${x.qty<=1?'Remover':'Diminuir'} ${esc(x.name)}">${x.qty<=1?'✕':'−'}</button><span>${x.qty}</span><button type="button" data-item-plus="${i}" ${itemAtMax?'disabled':''} aria-label="Aumentar ${esc(x.name)}">+</button></div></div><div class="meta">${money(x.price)} cada · Total do item: ${money(rowTotal)}</div>${addonsHtml}<div class="field" style="margin-top:6px"><textarea data-cart-note="${i}" rows="1" placeholder="Observação (opcional)">${esc(x.notes||'')}</textarea></div>${canAddon?`<button type="button" class="btn" data-cart-addaddon="${i}" style="margin-top:4px">+ Adicional</button>`:''}<button type="button" class="btn" data-rem="${i}" style="margin-top:4px">Remover item</button></div>`}).join('')||'<p class="meta">Carrinho vazio.</p>'}${cart.length?`<div class="field" style="margin-top:12px"><label>Observação geral (opcional)</label><textarea id="fCartNote" rows="2" placeholder="Ex.: observação sobre outros itens do pedido">${esc(typeof window.cartGeneralNote==='string'?window.cartGeneralNote:'')}</textarea></div>`:''}${cart.length?cartUpsellSuggestions().map(s=>`<div class="cardbox" style="margin-top:12px;background:var(--e2);border-color:var(--ember)"><h3 style="margin:0 0 8px;font-size:14px">💡 Que tal incluir ${esc(s.category.name.toLowerCase())}?</h3>${s.products.map(p=>`<div class="itemrow" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;margin-bottom:6px">${p.photo?`<img src="${p.photo}" style="width:40px;height:40px;object-fit:cover;border-radius:6px;flex-shrink:0">`:''}<div style="flex:1"><b>${esc(p.name)}</b><div class="meta">${money(p.price)}</div></div><button type="button" class="btn" data-add="${p.id}">+ Adicionar</button></div>`).join('')}</div>`).join(''):''}${formErr?`<div class="err">${esc(formErr)}</div>`:''}<div class="row" style="margin-top:12px"><b>Total</b><b class="price">${money(cartSubtotal())}</b></div>${cart.length?'<button class="primary" id="checkout">Finalizar pedido</button>':''}<button class="ghost" id="closeCart">Continuar comprando</button></div></div>`}
  if(overlay==='checkout')return renderCheckout();
  if(overlay==='pdvSaved'){let o=db.orders.find(x=>x.id===window.lastOrderId);return `<div class="overlay show"><div class="panel"><div class="head"><h2>Pedido salvo</h2><button class="x" id="closeOverlay">×</button></div><p>Pedido <b>${o?.id||''}</b> salvo com sucesso.</p><button class="primary" id="printSavedPdv">🖨 Imprimir pedido</button>${o&&validPhone(o.customer.phone)?`<a class="primary" style="display:block;text-align:center;text-decoration:none;margin-top:8px" target="_blank" href="${notifyCustomerStart(o)}">💬 Enviar dados do pedido ao cliente</a>`:''}<button class="ghost" id="closePdvSaved">Fechar</button></div></div>`}
  if(overlay==='confirm'){let o=db.orders.find(x=>x.id===window.lastOrderId);return `<div class="overlay show"><div class="panel"><div class="head"><h2>Pedido enviado 🔥</h2><button class="x" id="closeOverlay">×</button></div><p>Pedido <b>${o.id}</b> registrado. O WhatsApp do administrador deve ter aberto automaticamente com os dados do pedido — se isso não aconteceu (bloqueio de pop-up), use o botão abaixo.</p>${validPhone(db.settings.adminWhatsApp)?`<a class="primary" style="display:block;text-align:center;text-decoration:none;margin-top:12px" target="_blank" href="${notifyAdmin(o)}">Enviar pedido ao WhatsApp do administrador</a>`:'<div class="err">O administrador ainda não cadastrou um WhatsApp válido.</div>'}<p class="meta" style="margin-top:12px">As atualizações de status também podem ser enviadas ao WhatsApp do cliente.</p><button class="ghost" id="closeConfirm">Voltar ao cardápio</button></div></div>`}
@@ -1184,7 +1260,11 @@ function renderCheckout(){
  const creditAvail=Number(session?.credit||0);
  const preCreditBase=cartSubtotal()+fee;
  const creditApplied=d.useCredit&&creditAvail>0?Math.min(creditAvail,preCreditBase):0;
- const base=Math.max(0,preCreditBase-creditApplied), total=paymentTotal(base,d.payment);
+ const afterCredit=Math.max(0,preCreditBase-creditApplied);
+ const couponCheck=d.couponCode&&d.couponOk?validateCoupon(d.couponCode):null;
+ const appliedCoupon=couponCheck&&couponCheck.ok?couponCheck.coupon:null;
+ const couponApplied=appliedCoupon?couponDiscountAmount(appliedCoupon,afterCredit):0;
+ const base=Math.max(0,afterCredit-couponApplied), total=paymentTotal(base,d.payment);
  return `<div class="overlay show"><div class="panel"><div class="head"><h2>Finalizar pedido</h2><button class="x" id="closeOverlay">×</button></div>
  ${session?`<div class="meta" style="margin-bottom:8px">Pedindo como <b>${esc(session.name)}</b> · <a href="#" id="checkoutLogout">Não é você?</a></div>`:''}
  <div class="field"><label>Nome</label><input autocomplete="off" id="fName" value="${esc(d.name)}"></div>
@@ -1194,12 +1274,13 @@ function renderCheckout(){
  <div class="field"><label>Pagamento</label><div class="chips">${activePays.map(p=>`<button class="chip ${d.payment===p.id?'active':''}" data-payment="${p.id}">${esc(p.name)}${paymentAdjustText(p)?` ${paymentAdjustText(p)}`:''}</button>`).join('')}</div></div>
  ${d.payment==='cash'?`<div class="field"><label>Troco para (opcional)</label><input autocomplete="off" id="fChangeFor" type="text" inputmode="decimal" value="${d.changeFor?moneyMaskFormat(Number(d.changeFor)||0):''}" placeholder="Ex.: 50,00"></div>`:''}<div class="field"><label>Observações</label><textarea id="fNotes">${esc(d.notes)}</textarea></div>${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  ${creditAvail>0?`<label class="chip" style="display:flex;align-items:center;gap:6px;margin:10px 0"><input type="checkbox" id="fUseCredit" ${d.useCredit?'checked':''}> Usar meu crédito disponível (${money(creditAvail)})</label>`:''}
- <div class="row"><span>Subtotal</span><b>${money(cartSubtotal())}</b></div>${fee?`<div class="row"><span>Entrega</span><b>${money(fee)}</b></div>`:''}${creditApplied>0?`<div class="row"><span>Crédito aplicado</span><b style="color:var(--ok)">-${money(creditApplied)}</b></div>`:''}<div class="row" style="margin-top:8px"><span>Total</span><b class="price">${money(total)}</b></div>
+ <div class="field" style="margin-top:10px"><label>Cupom de desconto (opcional)</label><div class="row" style="gap:8px"><input autocomplete="off" id="fCoupon" value="${esc(d.couponCode||'')}" placeholder="Ex.: BEMVINDO10" style="flex:1;text-transform:uppercase"><button type="button" class="btn" id="applyCoupon" style="white-space:nowrap">Aplicar</button></div>${d.couponMsg?`<p class="${d.couponOk?'ok':'err'}" style="margin-top:6px">${esc(d.couponMsg)}</p>`:''}</div>
+ <div class="row"><span>Subtotal</span><b>${money(cartSubtotal())}</b></div>${fee?`<div class="row"><span>Entrega</span><b>${money(fee)}</b></div>`:''}${creditApplied>0?`<div class="row"><span>Crédito aplicado</span><b style="color:var(--ok)">-${money(creditApplied)}</b></div>`:''}${couponApplied>0?`<div class="row"><span>Cupom (${esc(appliedCoupon.code)})</span><b style="color:var(--ok)">-${money(couponApplied)}</b></div>`:''}<div class="row" style="margin-top:8px"><span>Total</span><b class="price">${money(total)}</b></div>
  <button class="primary" id="submitOrder">Confirmar pedido</button><button class="ghost" id="backCart">Voltar</button></div></div>`;
 }
 function renderAdmin(){
  if(!adminAuth)return `<div class="login-wrap" style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px"><div class="cardbox" style="max-width:360px;width:100%;text-align:center"><h2>🔥 Área administrativa</h2><p class="meta" style="margin:10px 0 15px">Pedidos, PDV, estoque e configurações.</p><input id="adminPass" type="password" placeholder="Senha" style="width:100%;padding:11px;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:7px">${formErr?`<div class="err">${esc(formErr)}</div>`:''}<button class="primary" id="doLogin">Entrar</button><a class="btn" href="#cliente" style="display:block;margin-top:8px;text-decoration:none">Voltar ao cliente</a></div></div>`;
- return `<div class="admin mobile-layout auto-responsive"><div class="top"><div class="top-left"><button class="menu-hamburger" id="menuToggle" aria-label="Abrir ou fechar menu" title="Menu"><span class="mh-label">MENU</span><span class="mh-icon">☰</span></button><div class="brand">🔥 Novo Cheff <span>BBQ · Administração</span></div></div><div class="actions"><a class="btn" href="#cliente">Cliente</a><button class="btn" id="logout">Sair</button></div></div>
+ return `<div class="admin mobile-layout auto-responsive"><div class="top"><div class="top-left"><button class="menu-hamburger" id="menuToggle" aria-label="Abrir ou fechar menu" title="Menu"><span class="mh-label">MENU</span><span class="mh-icon">☰</span></button><div class="brand">🔥 Novo Cheff <span>BBQ · Administração</span></div></div><div class="actions"><span class="sync-status" id="syncStatusIndicator" title="Status da sincronização com o Supabase">🟢 Sincronizado</span><a class="btn" href="#cliente">Cliente</a><button class="btn" id="logout">Sair</button></div></div>
  <div class="mobile-admin-nav ${mobileAdminNavOpen?'show':''}" id="mobileAdminNav">${adminNav()}</div>
  <div class="adminlayout admin-shell ${window.adminOpsOpen===false?'admin-side-collapsed':''}"><aside class="side">${adminNav()}</aside><main class="main">${renderAdminTab()}</main></div>${overlay?renderOverlay():''}</div>`;
 }
@@ -1208,7 +1289,7 @@ function renderCaixaNav(){
  const caixaViewCur=window.caixaView||'pedidos_abertos';
  return `<button class="tab ${tab==='caixa'?'active':''}" data-tab="caixa">💰 Operações de Caixa <span class="nav-chevron ${caixaOpenNav?'open':''}">▾</span></button>${caixaOpenNav?`<div class="report-subnav"><div class="cash-nav-state"><span class="cash-dot ${db.cash.open?'dot-open':'dot-closed'}"></span>Caixa ${db.cash.open?'Aberto':'Fechado'}</div><button class="subtab ${tab==='caixa'&&caixaViewCur==='pedidos_abertos'?'active':''}" data-caixa-view="pedidos_abertos">📄 Pedidos em Aberto</button><button class="subtab" data-caixa-action="toggle">${db.cash.open?'🔒 Fechar Caixa':'🔓 Abrir Caixa'}</button><button class="subtab" data-caixa-action="entrada">➕ Inserir Dinheiro</button><button class="subtab" data-caixa-action="saida">➖ Retirar Dinheiro</button><button class="subtab ${tab==='caixa'&&caixaViewCur==='historico'?'active':''}" data-caixa-view="historico">🕓 Histórico</button></div>`:''}`;
 }
-function adminNav(){window.navOpen=window.navOpen||{};const reportsOpen=!!window.navOpen.relatorios,cadastroOpen=!!window.navOpen.cadastro;return `<div class="section">Operação</div><button class="tab ${tab==='pedidos'?'active':''}" data-tab="pedidos">🧾 Pedidos / PDV</button>${renderCaixaNav()}<button class="tab ${tab==='entregas'?'active':''}" data-tab="entregas">🛵 Entregas</button><div class="section">Cadastros</div>${[['estoque','📦 Produtos e Estoque'],['movimentacao','📑 Movimentação']].map(x=>`<button class="tab ${tab===x[0]?'active':''}" data-tab="${x[0]}">${x[1]}</button>`).join('')}<button class="tab ${tab==='cadastro'?'active':''}" data-tab="cadastro">👤 Cadastro <span class="nav-chevron ${cadastroOpen?'open':''}">▾</span></button>${cadastroOpen?`<div class="report-subnav">${[['clientes','Clientes'],['fornecedores','Fornecedores'],['entregadores','Entregadores'],['adicionais','Adicionais'],['materias','Matérias-primas'],['receitas','Receitas'],['pagamento','Forma de pagamento'],['taxas','Taxas de entrega']].map(x=>`<button class="subtab ${tab==='cadastro'&&(window.cadastroView||'clientes')===x[0]?'active':''}" data-cadastro-view="${x[0]}">${x[1]}</button>`).join('')}</div>`:''}<button class="tab ${(tab==='relatorio-vendas'||tab==='vendas-periodo')?'active':''}" data-tab="relatorio-vendas">📈 Relatório Vendas</button><button class="tab ${tab==='relatorios'?'active':''}" data-tab="relatorios">📊 Relatórios <span class="nav-chevron ${reportsOpen?'open':''}">▾</span></button>${reportsOpen?`<div class="report-subnav">${[['vendas','Vendas'],['vendas_dia','Vendas do dia'],['itens_vendidos','Itens mais vendidos'],['entrega','Entrega'],['estoque_valor','Valor estimado do estoque'],['inadimplentes','Clientes inadimplentes']].map(x=>`<button class="subtab ${tab==='relatorios'&&window.reportView===x[0]?'active':''}" data-report-view="${x[0]}">${x[1]}</button>`).join('')}</div>`:''}<div class="section">Sistema</div><button class="tab ${tab==='config'?'active':''}" data-tab="config">⚙️ Configurações</button>`}
+function adminNav(){window.navOpen=window.navOpen||{};const reportsOpen=!!window.navOpen.relatorios,cadastroOpen=!!window.navOpen.cadastro;return `<div class="section">Operação</div><button class="tab ${tab==='resumo'?'active':''}" data-tab="resumo">🏠 Resumo</button><button class="tab ${tab==='pedidos'?'active':''}" data-tab="pedidos">🧾 Pedidos / PDV</button>${renderCaixaNav()}<button class="tab ${tab==='entregas'?'active':''}" data-tab="entregas">🛵 Entregas</button><div class="section">Cadastros</div>${[['estoque','📦 Produtos e Estoque'],['movimentacao','📑 Movimentação']].map(x=>`<button class="tab ${tab===x[0]?'active':''}" data-tab="${x[0]}">${x[1]}</button>`).join('')}<button class="tab ${tab==='cadastro'?'active':''}" data-tab="cadastro">👤 Cadastro <span class="nav-chevron ${cadastroOpen?'open':''}">▾</span></button>${cadastroOpen?`<div class="report-subnav">${[['clientes','Clientes'],['fornecedores','Fornecedores'],['entregadores','Entregadores'],['adicionais','Adicionais'],['materias','Matérias-primas'],['receitas','Receitas'],['pagamento','Forma de pagamento'],['taxas','Taxas de entrega'],['cupons','Cupons']].map(x=>`<button class="subtab ${tab==='cadastro'&&(window.cadastroView||'clientes')===x[0]?'active':''}" data-cadastro-view="${x[0]}">${x[1]}</button>`).join('')}</div>`:''}<button class="tab ${(tab==='relatorio-vendas'||tab==='vendas-periodo')?'active':''}" data-tab="relatorio-vendas">📈 Relatório Vendas</button><button class="tab ${tab==='relatorios'?'active':''}" data-tab="relatorios">📊 Relatórios <span class="nav-chevron ${reportsOpen?'open':''}">▾</span></button>${reportsOpen?`<div class="report-subnav">${[['vendas','Vendas'],['vendas_dia','Vendas do dia'],['itens_vendidos','Desempenho de produtos'],['entrega','Entrega'],['estoque_valor','Valor estimado do estoque'],['inadimplentes','Clientes inadimplentes']].map(x=>`<button class="subtab ${tab==='relatorios'&&window.reportView===x[0]?'active':''}" data-report-view="${x[0]}">${x[1]}</button>`).join('')}</div>`:''}<div class="section">Sistema</div><button class="tab ${tab==='config'?'active':''}" data-tab="config">⚙️ Configurações</button>`}
 function renderUnifiedPDV(){
   const hidden=!!window.pdvHideCreate;
   const active=activeOrdersCount();
@@ -1220,7 +1301,38 @@ function renderUnifiedPDV(){
     ${hidden?'':`<aside class="pdv-create-pane">${renderPdv()}</aside>`}
   </div>`;
 }
-function renderAdminTab(){return ({pedidos:renderUnifiedPDV,caixa:renderCash,entregas:renderDeliveries,estoque:renderStock,movimentacao:renderMovimentacao,cadastro:renderCadastro,relatorios:renderReports,'relatorio-vendas':renderRelatorioVendas,'vendas-periodo':renderVendasPeriodo,config:renderSettings}[tab]||renderUnifiedPDV)()}
+function renderAdminTab(){return ({resumo:renderDashboard,pedidos:renderUnifiedPDV,caixa:renderCash,entregas:renderDeliveries,estoque:renderStock,movimentacao:renderMovimentacao,cadastro:renderCadastro,relatorios:renderReports,'relatorio-vendas':renderRelatorioVendas,'vendas-periodo':renderVendasPeriodo,config:renderSettings}[tab]||renderUnifiedPDV)()}
+function renderDashboard(){
+ const todayStart=new Date();todayStart.setHours(0,0,0,0);
+ const todayEnd=new Date();todayEnd.setHours(23,59,59,999);
+ const todayOrders=db.orders.filter(o=>{const d=new Date(o.createdAt);return d>=todayStart&&d<=todayEnd});
+ const todaySales=todayOrders.filter(o=>o.status==='concluido').reduce((s,o)=>s+(o.total||0),0);
+ const pendentes=db.orders.filter(o=>!['concluido','cancelado'].includes(o.status));
+ const lowStockProducts=db.products.filter(p=>p.active&&stockAlertLevel(getProductStock(p),p.lowStockThreshold));
+ const lowStockIngredients=db.ingredients.filter(m=>stockAlertLevel(getIngredientAvailable(m.id),m.lowStockThreshold));
+ const totalLowStock=lowStockProducts.length+lowStockIngredients.length;
+ const prodToday={};
+ todayOrders.filter(o=>o.status==='concluido').forEach(o=>o.items.forEach(x=>{prodToday[x.productId]=(prodToday[x.productId]||0)+x.qty}));
+ const topToday=Object.entries(prodToday).sort((a,b)=>b[1]-a[1])[0];
+ const topProduct=topToday?db.products.find(p=>p.id===topToday[0]):null;
+ const syncMap={ok:'🟢 Sincronizado',pending:'🟡 Alterações pendentes',syncing:'🟡 Sincronizando…',error:'🔴 Falha ao sincronizar'};
+ return `<h2>🏠 Resumo</h2>
+ <div class="metric">
+  <div><span class="meta">Vendas de hoje</span><b>${money(todaySales)}</b></div>
+  <div><span class="meta">Pedidos pendentes</span><b>${pendentes.length}</b></div>
+  <div><span class="meta">Pedidos hoje</span><b>${todayOrders.length}</b></div>
+ </div>
+ <div class="cardbox" style="margin-top:14px">
+  <h3>Status geral</h3>
+  <div class="itemrow"><div class="row"><span>Sincronização com o Supabase</span><span>${syncMap[window.__syncStatus]||syncMap.ok}</span></div></div>
+  <div class="itemrow"><div class="row"><span>Caixa</span><span>${db.cash.open?'🟢 Aberto':'🔴 Fechado'}</span></div></div>
+  <div class="itemrow"><div class="row"><span>Loja</span><span>${storeOpen()?'🟢 Aberta':'🔴 Fechada'}</span></div></div>
+ </div>
+ ${totalLowStock>0?`<div class="cardbox" style="margin-top:14px;border-color:#e28584"><h3>⚠️ Estoque baixo (${totalLowStock})</h3>${lowStockProducts.map(p=>`<div class="itemrow"><div class="row"><span>🍔 ${esc(p.name)}</span><b style="color:#e28584">${getProductStock(p)}</b></div></div>`).join('')}${lowStockIngredients.map(m=>`<div class="itemrow"><div class="row"><span>🧪 ${esc(m.name)}</span><b style="color:#e28584">${getIngredientAvailable(m.id)} ${esc(m.unit||'')}</b></div></div>`).join('')}<button class="btn" data-tab="estoque" style="margin-top:8px;width:100%">Ver Produtos e Estoque</button></div>`:''}
+ ${topProduct?`<div class="cardbox" style="margin-top:14px"><h3>🏆 Mais vendido hoje</h3><div class="itemrow"><div class="row"><b>${esc(topProduct.name)}</b><b>${topToday[1]} un.</b></div></div></div>`:''}
+ ${pendentes.length>0?`<div class="cardbox" style="margin-top:14px"><h3>📋 Pedidos pendentes</h3>${pendentes.slice(0,5).map(o=>`<div class="itemrow"><div class="row"><b>${esc(o.id)}</b><span class="pill">${labelStatus(o.status)}</span></div><div class="meta">${esc(o.customer?.name||'')} · ${money(o.total)}</div></div>`).join('')}<button class="btn" data-tab="pedidos" style="margin-top:8px;width:100%">Ver todos os pedidos</button></div>`:''}
+ `;
+}
 function filteredOrders(){
  const os=db.orders.slice().reverse();
  const f=window.pdvOrderFilter||(window.pdvOrderFilter={status:'ativos',search:''});
@@ -1582,6 +1694,7 @@ function renderNewProductModal(){
  <div class="formgrid"><div class="field"><label>Custo (calculado automaticamente)</label><input autocomplete="off" id="npCost" type="text" value="R$ 0,00" disabled></div><div class="field"><label>Valor de venda</label><input autocomplete="off" id="npPrice" type="text" inputmode="decimal" placeholder="0,00"></div></div>
  <p class="meta" style="margin-top:-6px;margin-bottom:11px">💰 O custo é calculado automaticamente pela média das últimas 3 entradas de fornecedor deste produto. Como ainda não há entradas registradas para ele, o custo começa em R$ 0,00 e será atualizado conforme você registrar entradas em Estoque › Entradas.</p>
  <div class="formgrid"><div class="field"><label>Preço antigo (opcional, para promoção)</label><input autocomplete="off" id="npOldPrice" type="text" inputmode="decimal" placeholder="0,00"></div><div class="field"><label>Estoque inicial</label><input autocomplete="off" id="npStock" type="number" min="0" value="0"></div></div>
+ <div class="field"><label>Avisar quando o estoque ficar menor ou igual a (opcional)</label><input autocomplete="off" id="npLowStock" type="number" min="0" placeholder="Ex.: 5"></div>
  <div class="field"><label>Descrição / Ingredientes</label><textarea id="npDesc" rows="3"></textarea></div>
  <div class="field"><label>Foto do produto</label><input type="file" id="npPhoto" accept="image/*"><div id="npPhotoPreview" style="margin-top:6px"></div></div>
  ${curType!=='pi'?`<div class="field"><label>Adicionais disponíveis neste produto</label>${db.addons.length?db.addons.map(a=>`<div class="addon-choice"><label style="display:flex;align-items:center;gap:8px;flex:1;cursor:pointer;margin:0"><input type="checkbox" data-newaddon="${a.id}"><span><b>${esc(a.name)}</b><div class="meta">+ ${money(a.price)} · limite global ${a.max}</div></span></label><div class="addon-counter"><button type="button" data-newaddon-minus="${a.id}">−</button><span id="newAddonMax_${a.id}">${a.max}</span><button type="button" data-newaddon-plus="${a.id}">+</button></div></div>`).join(''):'<span class="meta">Nenhum adicional cadastrado.</span>'}<p class="meta" style="margin-top:4px">Marque os adicionais permitidos e use +/− para definir quantas unidades este produto aceita de cada um.</p></div>`:''}
@@ -1602,6 +1715,7 @@ function renderEditProductModal(){
  <div class="formgrid"><div class="field"><label>Custo (calculado automaticamente)</label><input autocomplete="off" id="epCost" type="text" value="${money(productAvgCost(p.id))}" disabled></div><div class="field"><label>Valor de venda</label><input autocomplete="off" id="epPrice" type="text" inputmode="decimal" value="${moneyMaskFormat(p.price)}"></div></div>
  <p class="meta" style="margin-top:-6px;margin-bottom:11px">💰 Custo calculado automaticamente pela média das últimas 3 entradas de fornecedor deste produto${(db.stockMovements||[]).some(m=>m.productId===p.id&&m.type==='entrada')?'':' (ainda sem entradas registradas — o custo é atualizado ao registrar entradas em Estoque › Entradas)'}.</p>
  <div class="formgrid"><div class="field"><label>Preço antigo (opcional, para promoção)</label><input autocomplete="off" id="epOldPrice" type="text" inputmode="decimal" value="${p.oldPrice?moneyMaskFormat(p.oldPrice):''}" placeholder="0,00"></div><div class="field"><label>Estoque${productHasRecipe(p)?' (calculado pela receita)':''}</label><input autocomplete="off" id="epStock" type="number" min="0" value="${getProductStock(p)}" ${productHasRecipe(p)?'disabled title="Este produto tem receita: o estoque é calculado automaticamente a partir das matérias-primas."':''}></div></div>${productHasRecipe(p)?'<p class="meta" style="margin-top:-6px;margin-bottom:11px">📦 O estoque deste produto é calculado automaticamente com base no saldo das matérias-primas da receita.</p>':''}
+ <div class="field"><label>Avisar quando o estoque ficar menor ou igual a (opcional)</label><input autocomplete="off" id="epLowStock" type="number" min="0" value="${p.lowStockThreshold||''}" placeholder="Ex.: 5"></div>
  <div class="field"><label>Descrição</label><input autocomplete="off" id="epDesc" value="${esc(p.desc||'')}"></div>
  <div class="field"><label>Foto do produto</label>${p.photo?`<div style="margin-bottom:6px"><img src="${p.photo}" style="max-width:120px;border-radius:8px;display:block"></div>`:''}<input type="file" id="epPhoto" accept="image/*"><div id="epPhotoPreview" style="margin-top:6px"></div>${p.photo?`<button type="button" class="ghost" id="epRemovePhoto">Remover foto</button>`:''}</div>
  ${curType!=='pi'?`<div class="field"><label>Adicionais disponíveis neste produto</label>${db.addons.length?db.addons.map(a=>{const ex=(p.addons||[]).find(o=>o.id===a.id),cur=ex?Math.min(a.max,ex.max):a.max;return `<div class="addon-choice"><label style="display:flex;align-items:center;gap:8px;flex:1;cursor:pointer;margin:0"><input type="checkbox" data-editaddon="${a.id}" ${ex?'checked':''}><span><b>${esc(a.name)}</b><div class="meta">+ ${money(a.price)} · limite global ${a.max}</div></span></label><div class="addon-counter"><button type="button" data-editaddon-minus="${a.id}">−</button><span id="editAddonMax_${a.id}">${cur}</span><button type="button" data-editaddon-plus="${a.id}">+</button></div></div>`}).join(''):'<span class="meta">Nenhum adicional cadastrado.</span>'}<p class="meta" style="margin-top:4px">Marque os adicionais permitidos e use +/− para definir quantas unidades este produto aceita de cada um.</p></div>`:''}
@@ -1769,10 +1883,19 @@ function renderItensVendidosPanel(){
  const os=db.orders||[], today=new Date().toISOString().slice(0,10); const f=window.reportFilter||{from:today,to:today};
  const inRange=o=>{let d=isoDay(o.createdAt);return (!f.from||d>=f.from)&&(!f.to||d<=f.to)&&o.status==='concluido'};
  const completed=os.filter(inRange);
- const prod={},adds={};completed.forEach(o=>o.items.forEach(x=>{prod[x.productId]=(prod[x.productId]||0)+x.qty;(x.addons||[]).forEach(a=>adds[a.id]=(adds[a.id]||0)+a.qty*x.qty)}));
+ const prod={},adds={},revenue={};
+ completed.forEach(o=>o.items.forEach(x=>{
+  prod[x.productId]=(prod[x.productId]||0)+x.qty;
+  revenue[x.productId]=(revenue[x.productId]||0)+x.price*x.qty;
+  (x.addons||[]).forEach(a=>adds[a.id]=(adds[a.id]||0)+a.qty*x.qty);
+ }));
+ const soldIds=new Set(Object.keys(prod));
+ const paradosProducts=db.products.filter(p=>p.active&&p.type!=='pi'&&!soldIds.has(p.id));
+ const sortedProd=Object.entries(prod).sort((a,b)=>b[1]-a[1]);
  return `<div class="report-panel report-itens-vendidos" style="display:${window.reportView==='itens_vendidos'?'block':'none'}">
- <div class="cardbox"><h3>Produtos mais vendidos (${f.from} a ${f.to})</h3>${Object.entries(prod).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="itemrow"><div class="row"><b>${esc(db.products.find(p=>p.id===k)?.name||k)}</b><b>${v} un.</b></div></div>`).join('')||'<span class="meta">Sem vendas no período.</span>'}</div>
+ <div class="cardbox"><h3>Desempenho de produtos (${f.from} a ${f.to})</h3><div class="stock-table-wrap"><table class="stock-table"><thead><tr><th>Produto</th><th>Qtd.</th><th>Receita</th><th>Custo</th><th>Margem</th></tr></thead><tbody>${sortedProd.map(([k,v])=>{const p=db.products.find(x=>x.id===k);const rev=revenue[k]||0;const unitCost=p?productUnitCost(p):0;const cost=unitCost*v;const margin=rev-cost;const marginPct=rev>0?(margin/rev*100):0;return `<tr><td>${esc(p?.name||k)}</td><td>${v}</td><td>${money(rev)}</td><td>${money(cost)}</td><td style="color:${margin>=0?'var(--ok)':'var(--red)'}">${money(margin)} (${marginPct.toFixed(0)}%)</td></tr>`}).join('')||'<tr><td colspan="5" class="meta" style="text-align:center;padding:16px">Sem vendas no período.</td></tr>'}</tbody></table></div></div>
  <div class="cardbox"><h3>Adicionais mais vendidos</h3>${Object.entries(adds).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="itemrow"><div class="row"><b>${esc(db.addons.find(a=>a.id===k)?.name||k)}</b><b>${v} un.</b></div></div>`).join('')||'<span class="meta">Sem adicionais vendidos.</span>'}</div>
+ <div class="cardbox"><h3>Produtos parados (sem vendas no período)</h3><p class="meta" style="margin-bottom:8px">Produtos ativos que não tiveram nenhuma venda entre ${f.from} e ${f.to} — considere destacar, promover ou rever esses itens.</p>${paradosProducts.length?paradosProducts.map(p=>`<div class="itemrow"><span>${esc(p.name)}</span></div>`).join(''):'<span class="meta">Nenhum — todos os produtos ativos venderam no período. 🎉</span>'}</div>
  </div>`;
 }
 function renderReports(){
@@ -2139,11 +2262,11 @@ function renderStockGeral(){
  <div class="cardbox"><h3>Adicionais</h3>${db.addons.map(a=>`<div class="itemrow"><div class="row"><b>${esc(a.name)}</b>${unlocked?`<input autocomplete="off" data-editstock="addon|${a.id}" type="number" min="0" value="${a.stock}" style="width:90px;text-align:right;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:6px;padding:6px">`:`<span class="${a.stock?'price':'sold'}">${a.stock}</span>`}</div></div>`).join('')||'<span class="meta">Nenhum adicional cadastrado.</span>'}</div>`;
 }
 function renderStockProdRow(p,unlocked,priceUnlocked){
- const st=getProductStock(p),hasR=productHasRecipe(p);
+ const st=getProductStock(p),hasR=productHasRecipe(p),alertLevel=stockAlertLevel(st,p.lowStockThreshold);
  return `<tr>
  <td><button type="button" class="stock-prod-name" data-editprod="${p.id}">${esc(p.name)}</button>${hasR?' <span class="tag">🧾 receita</span>':''}${p.type==='pi'?' <span class="tag">PI</span>':''}</td>
  <td>${priceUnlocked?`<input autocomplete="off" data-editprice="${p.id}" type="text" inputmode="decimal" value="${moneyMaskFormat(p.price)}" style="width:80px;text-align:right;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:6px;padding:5px 6px">`:`<span class="price">${money(p.price)}</span>`}</td>
- <td>${unlocked&&!hasR?`<input autocomplete="off" data-editstock="product|${p.id}" type="number" min="0" value="${st}" style="width:70px;text-align:right;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:6px;padding:5px 6px">`:`<span class="${st?'':'sold'}">${st}</span>`}</td>
+ <td>${unlocked&&!hasR?`<input autocomplete="off" data-editstock="product|${p.id}" type="number" min="0" value="${st}" style="width:70px;text-align:right;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:6px;padding:5px 6px">`:`<span class="${st?'':'sold'}" title="${alertLevel==='low'?'Estoque baixo':''}">${alertLevel==='low'?'⚠️ ':''}${st}</span>`}</td>
  <td style="text-align:center"><button type="button" class="toggle-btn ${p.active?'active':''}" data-togglestockprod="${p.id}" onclick="event.stopPropagation()" title="Ativar ou desativar este produto"></button></td>
  <td style="text-align:center"><button type="button" class="icon-btn dup" data-dupprod="${p.id}" onclick="event.stopPropagation()" title="Duplicar produto">📋</button></td>
  <td style="text-align:center"><button type="button" class="icon-btn" data-delprodstock="${p.id}" onclick="event.stopPropagation()" title="Excluir produto">🗑️</button></td>
@@ -2180,6 +2303,8 @@ function renderEditCategoryModal(){
  <div class="head"><h2>Editar categoria</h2><button class="x" id="closeOverlay">×</button></div>
  <div class="field"><label>Nome da categoria</label><input autocomplete="off" id="ecName" value="${esc(c.name)}"></div>
  <label class="chip" style="display:inline-flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="ecActive" ${c.active!==false?'checked':''}> Categoria ativa (visível para o cliente)</label>
+ <label class="chip" style="display:inline-flex;align-items:center;gap:8px;margin-bottom:6px"><input type="checkbox" id="ecUpsell" ${c.upsell?'checked':''}> Sugerir automaticamente se faltar no carrinho</label>
+ <p class="meta" style="margin:-2px 0 12px">Se marcado, quando o cliente for finalizar o pedido sem nenhum item desta categoria, o app oferece uma sugestão rápida (ex.: marque "Bebidas" ou "Sobremesas" pra incentivar o cliente a incluir algo a mais).</p>
  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  <button class="primary" id="saveEditCategory">Salvar alterações</button>
  <button class="ghost" id="deleteCategory" ${catProds.length?'disabled':''} title="${catProds.length?'Mova ou exclua os produtos desta categoria antes de excluí-la':'Excluir categoria'}">Excluir categoria${catProds.length?` (${catProds.length} produto${catProds.length===1?'':'s'} nela)`:''}</button>
@@ -2298,7 +2423,7 @@ function renderCashToggleDialog(){
 }
 function renderCadastro(){
  window.cadastroView=window.cadastroView||'clientes';
- return ({clientes:renderCadastroClientes,fornecedores:renderCadastroFornecedores,entregadores:renderCadastroEntregadores,adicionais:renderCadastroAdicionais,materias:renderCadastroMaterias,receitas:renderCadastroReceitas,pagamento:renderCadastroPagamento,taxas:renderCadastroTaxas}[window.cadastroView]||renderCadastroClientes)();
+ return ({clientes:renderCadastroClientes,fornecedores:renderCadastroFornecedores,entregadores:renderCadastroEntregadores,adicionais:renderCadastroAdicionais,materias:renderCadastroMaterias,receitas:renderCadastroReceitas,pagamento:renderCadastroPagamento,taxas:renderCadastroTaxas,cupons:renderCadastroCupons}[window.cadastroView]||renderCadastroClientes)();
 }
 
 function renderCadastroFornecedores(){
@@ -2456,11 +2581,12 @@ function renderSupplierDialog(){
 }
 function renderCadastroMaterias(){
  try{
-  const lowStockIngredients=db.ingredients.filter(m=>getIngredientAvailable(m.id)<=0);
+  const lowStockIngredients=db.ingredients.filter(m=>stockAlertLevel(getIngredientAvailable(m.id),m.lowStockThreshold));
+  const criticalCount=db.ingredients.filter(m=>getIngredientAvailable(m.id)<=0).length;
   let html=`<h2>Cadastro · Matérias-primas</h2>`;
   
   if(lowStockIngredients.length>0){
-   html+=`<div style="background:#e285842a;border:1px solid #e28584;border-radius:8px;padding:12px;margin-bottom:14px;color:#e28584;font-weight:700">⚠️ Alerta: ${lowStockIngredients.length} matéria-prima(s) sem estoque!</div>`;
+   html+=`<div style="background:#e285842a;border:1px solid #e28584;border-radius:8px;padding:12px;margin-bottom:14px;color:#e28584;font-weight:700">⚠️ Alerta: ${lowStockIngredients.length} matéria-prima(s) com estoque baixo${criticalCount>0?` (${criticalCount} sem estoque)`:''}!</div>`;
   }
   
   html+=`<div class="cardbox"><button class="primary" id="newMateriaBtn" style="width:100%;margin-bottom:16px">➕ Cadastrar nova matéria-prima</button><h3>Matérias-primas cadastradas</h3><p class="meta" style="margin-bottom:10px">O estoque abaixo é debitado automaticamente a cada venda dos produtos que usam esta matéria-prima na receita.</p>`;
@@ -2471,11 +2597,12 @@ function renderCadastroMaterias(){
    db.ingredients.forEach(m=>{
     const available=getIngredientAvailable(m.id);
     const usedBy=db.products.filter(p=>(p.recipe||[]).some(r=>r.ingredientId===m.id));
-    const isLowStock=available<=0;
-    const borderStyle=isLowStock?'border-color:#e28584;background:#e285842a':'';
+    const alertLevel=stockAlertLevel(available,m.lowStockThreshold);
+    const isLowStock=alertLevel==='critical';
+    const borderStyle=alertLevel?'border-color:#e28584;background:#e285842a':'';
     const statusClass=isLowStock?'status-inactive':(m.active?'status-active':'status-inactive');
-    const statusText=isLowStock?'⚠️ CRÍTICO':(m.active?'Ativo':'Inativo');
-    const availColor=isLowStock?'#e28584':'#a7d08b';
+    const statusText=isLowStock?'⚠️ CRÍTICO':alertLevel==='low'?'⚠️ ESTOQUE BAIXO':(m.active?'Ativo':'Inativo');
+    const availColor=alertLevel?'#e28584':'#a7d08b';
     
     html+=`<div class="addon-item" style="${borderStyle}" data-clickmateria="${m.id}">
      <div class="addon-header">
@@ -2587,6 +2714,7 @@ function renderMateriaDialog(){
  <div class="field"><label>Unidade de medida</label><select id="dialogMatUnit"><option value="">Selecione</option>${materiaUnitOptionsHtml(d.unit||'')}</select></div>
  <div class="grid2">
   <div class="field"><label>Estoque atual</label><input autocomplete="off" id="dialogMatStock" type="number" value="${d.stock||''}" placeholder="0"></div>
+  <div class="field"><label>Avisar quando o estoque ficar menor ou igual a (opcional)</label><input autocomplete="off" id="dialogMatLowStock" type="number" min="0" value="${d.lowStockThreshold||''}" placeholder="Ex.: 2000"></div>
   <div class="field"><label>Custo por unidade</label><input autocomplete="off" id="dialogMatCost" type="text" inputmode="decimal" value="${d.cost?String(d.cost).replace('.',','):''}" placeholder="Ex.: 54 (por kg) ou 0,054 (por g)"><p class="meta" style="margin-top:6px">Use o preço pela MESMA unidade escolhida acima. Ex.: se a unidade é "g" e o quilo custa R$ 54,00, o custo por grama é 0,054 — pode digitar com 3 ou 4 casas decimais.</p></div>
  </div>
  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
@@ -2669,6 +2797,56 @@ function renderCadastroTaxas(){
  const rows=sortedNeighborhoods();
  return `<h2>Cadastro · Taxas de entrega</h2><div class="cardbox"><h3>Nova taxa de entrega</h3><div class="formgrid"><div class="field"><label>Bairro</label><input id="nbName" autocomplete="off" placeholder="Ex.: Centro"></div><div class="field"><label>Município</label><input id="nbMunicipio" autocomplete="off" placeholder="Ex.: São Luís"></div></div><div class="field"><label>Valor da taxa</label><input id="nbFee" autocomplete="off" type="text" inputmode="decimal" placeholder="0,00"></div><button class="primary" id="addNb">Cadastrar taxa de entrega</button></div><p class="meta" style="margin:0 0 6px 2px">Toque em uma taxa cadastrada para editar os dados.</p><div class="cardbox" style="padding:0;overflow:auto"><table class="table taxas-table"><thead><tr><th>Nome</th><th>Município</th><th>Valor</th><th>Ativo</th><th></th></tr></thead><tbody>${rows.length?rows.map(n=>`<tr class="itemrow-clickable" data-clicknb="${n.id}" style="cursor:pointer"><td>${esc(n.name)}</td><td>${esc(n.municipio||'—')}</td><td style="color:var(--ok);font-weight:700">${money(n.fee)}</td><td><button class="toggle-btn ${n.active!==false?'active':''}" data-togglenb="${n.id}" title="Ativar ou desativar esta taxa"></button></td><td style="text-align:right"><button class="icon-btn" data-deln="${n.id}" title="Excluir taxa">🗑️</button></td></tr>`).join(''):'<tr><td colspan="5" class="meta" style="text-align:center;padding:20px">Nenhuma taxa de entrega cadastrada.</td></tr>'}</tbody></table></div>`;
 }
+function renderCadastroCupons(){
+ return `<h2>Cadastro · Cupons</h2>
+ <button class="primary" id="newCouponBtn" style="width:100%;margin-bottom:16px">➕ Novo cupom</button>
+ <div class="cardbox" style="padding:0;overflow:auto">
+ <table class="table">
+  <thead><tr><th>Código</th><th>Desconto</th><th>Usos</th><th>Válido até</th><th>Ativo</th><th></th></tr></thead>
+  <tbody>${db.coupons.length?db.coupons.map(c=>`<tr class="itemrow-clickable" data-clickcoupon="${c.id}" style="cursor:pointer">
+   <td><b>${esc(c.code)}</b></td>
+   <td>${c.type==='percent'?c.value+'%':money(c.value)}</td>
+   <td>${c.usedCount}${c.maxUses?' / '+c.maxUses:''}</td>
+   <td>${c.expiresAt?fmtDate(c.expiresAt):'—'}</td>
+   <td onclick="event.stopPropagation()"><button type="button" class="toggle-btn ${c.active?'active':''}" data-togglecoupon="${c.id}" title="Ativar ou desativar"></button></td>
+   <td style="text-align:center" onclick="event.stopPropagation()"><button type="button" class="icon-btn" data-delcoupon="${c.id}" title="Excluir">🗑️</button></td>
+  </tr>`).join(''):'<tr><td colspan="6" class="meta" style="text-align:center;padding:20px">Nenhum cupom cadastrado.</td></tr>'}</tbody>
+ </table>
+ </div>`;
+}
+function renderCouponDialog(){
+ const isEdit=!!window.editingCoupon;
+ const d=window.couponDraft||(window.couponDraft={type:'percent',active:true});
+ return `<div class="overlay show"><div class="panel" style="max-width:500px">
+ <div class="head"><h2>${isEdit?'Editar cupom':'Novo cupom'}</h2><button class="x" id="closeOverlay">×</button></div>
+ <div class="field"><label>Código</label><input autocomplete="off" id="couponCode" value="${esc(d.code||'')}" placeholder="Ex.: BEMVINDO10" style="text-transform:uppercase"></div>
+ <div class="field"><label>Tipo de desconto</label><div class="row" style="gap:8px">
+  <button type="button" class="btn ${(d.type||'percent')==='percent'?'primary':''}" data-coupontype="percent" style="flex:1">% Percentual</button>
+  <button type="button" class="btn ${d.type==='fixed'?'primary':''}" data-coupontype="fixed" style="flex:1">R$ Valor fixo</button>
+ </div></div>
+ <div class="field"><label>Valor ${(d.type||'percent')==='percent'?'(%)':'(R$)'}</label>${(d.type||'percent')==='percent'?`<input autocomplete="off" id="couponValue" type="number" min="0" max="100" step="0.01" value="${d.value||''}" placeholder="Ex.: 10">`:`<input autocomplete="off" id="couponValue" type="text" inputmode="decimal" value="${d.value?moneyMaskFormat(Number(d.value)||0):''}" placeholder="0,00">`}</div>
+ <div class="formgrid"><div class="field"><label>Limite de usos (opcional)</label><input autocomplete="off" id="couponMaxUses" type="number" min="1" value="${d.maxUses||''}" placeholder="Ilimitado"></div><div class="field"><label>Válido até (opcional)</label><input autocomplete="off" id="couponExpires" type="date" value="${d.expiresAt||''}"></div></div>
+ <label class="chip"><input type="checkbox" id="couponActive" ${d.active!==false?'checked':''}> Ativo</label>
+ ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
+ <button class="primary" id="saveCoupon" style="margin-top:10px">${isEdit?'Salvar alterações':'Cadastrar cupom'}</button>
+ ${isEdit?`<button class="danger" style="width:100%;margin-top:8px" id="deleteCoupon">🗑️ Excluir este cupom</button>`:''}
+ </div></div>`;
+}
+function validateCoupon(codeRaw){
+ const code=String(codeRaw||'').trim().toUpperCase();
+ if(!code)return {ok:false,error:'Informe um código de cupom.'};
+ const c=db.coupons.find(x=>x.code===code);
+ if(!c)return {ok:false,error:'Cupom não encontrado.'};
+ if(!c.active)return {ok:false,error:'Este cupom não está mais ativo.'};
+ if(c.expiresAt&&isoDay(new Date())>c.expiresAt)return {ok:false,error:'Este cupom expirou.'};
+ if(c.maxUses&&c.usedCount>=c.maxUses)return {ok:false,error:'Este cupom já atingiu o limite de usos.'};
+ return {ok:true,coupon:c};
+}
+function couponDiscountAmount(coupon,base){
+ if(!coupon)return 0;
+ if(coupon.type==='percent')return +(base*(Number(coupon.value)||0)/100).toFixed(2);
+ return Math.min(Number(coupon.value)||0,Math.max(0,base));
+}
 function renderSettings(){
  const days=['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
  return `<h2>Configurações</h2><div class="settings-list">
@@ -2677,6 +2855,7 @@ function renderSettings(){
  <details><summary>Mesas</summary><div class="settings-content"><input autocomplete="off" id="tableName" placeholder="Mesa 06"><button class="primary" id="addTable">Adicionar mesa</button>${db.tables.map(t=>`<div class="itemrow">${esc(t)} <button class="btn" data-deltable="${esc(t)}">Excluir</button></div>`).join('')}</div></details>
  <details><summary>Textos de notificação ao cliente</summary><div class="settings-content"><p class="meta">Use {cliente}, {id} e {entregador} para inserir dados automaticamente.</p><div class="field"><label>Saudação (novo pedido)</label><textarea id="msgSaudacao" rows="2">${esc(db.settings.messages.saudacao)}</textarea><div class="meta">Enviada quando você clicar em "Enviar dados do pedido ao cliente" logo após o pedido ser feito (PDV ou site). Os dados do pedido (loja, itens, total etc.) são incluídos automaticamente depois deste texto.</div></div><div class="field"><label>Retirada no balcão</label><textarea id="msgRetirada" rows="2">${esc(db.settings.messages.retirada)}</textarea></div><div class="field"><label>Saiu para entrega</label><textarea id="msgEntrega" rows="2">${esc(db.settings.messages.entrega)}</textarea></div><div class="field"><label>Chamada para mesa</label><textarea id="msgMesa" rows="2">${esc(db.settings.messages.mesa)}</textarea></div><div class="field"><label>Encerramento do pedido (agradecimento)</label><textarea id="msgEncerramento" rows="2">${esc(db.settings.messages.encerramento)}</textarea><div class="meta">Enviada quando o pedido é marcado como concluído.</div></div><div class="field"><label>Cancelamento do pedido</label><textarea id="msgCancelamento" rows="2">${esc(db.settings.messages.cancelamento)}</textarea><div class="meta">Enviada quando você cancela o pedido pelo administrador.</div></div><div class="field"><label>Estabelecimento fechado</label><textarea id="msgFechado" rows="2">${esc(db.settings.messages.fechado)}</textarea><div class="meta">Exibida no cardápio e ao tentar finalizar o pedido quando a loja está fechada.</div></div><button class="primary" id="saveMessages">Salvar textos</button></div></details>
  <details><summary>Configurações de impressão</summary><div class="settings-content"><div class="grid2"><div class="field"><label>Fonte</label><select id="printFont"><option value="12px monospace" ${db.settings.print.font==='12px monospace'?'selected':''}>Monospace 12</option><option value="14px monospace" ${db.settings.print.font==='14px monospace'?'selected':''}>Monospace 14</option><option value="16px monospace" ${db.settings.print.font==='16px monospace'?'selected':''}>Monospace 16</option><option value="18px monospace" ${db.settings.print.font==='18px monospace'?'selected':''}>Monospace 18</option><option value="20px monospace" ${db.settings.print.font==='20px monospace'?'selected':''}>Monospace 20</option><option value="24px monospace" ${db.settings.print.font==='24px monospace'?'selected':''}>Monospace 24</option><option value="14px Arial" ${db.settings.print.font==='14px Arial'?'selected':''}>Arial 14</option><option value="16px Arial" ${db.settings.print.font==='16px Arial'?'selected':''}>Arial 16</option><option value="18px Arial" ${db.settings.print.font==='18px Arial'?'selected':''}>Arial 18</option><option value="20px Arial" ${db.settings.print.font==='20px Arial'?'selected':''}>Arial 20</option><option value="14px 'Courier New'" ${db.settings.print.font==="14px 'Courier New'"?'selected':''}>Courier New 14</option><option value="16px 'Courier New'" ${db.settings.print.font==="16px 'Courier New'"?'selected':''}>Courier New 16</option><option value="18px 'Courier New'" ${db.settings.print.font==="18px 'Courier New'"?'selected':''}>Courier New 18</option></select><div class="meta">Se o texto sair pequeno mesmo com fonte maior, verifique também a escala de impressão (100%) nas configurações da impressora térmica.</div></div><div class="field"><label>Tipo de papel</label><select id="printPaper"><option value="58mm" ${db.settings.print.paper==='58mm'?'selected':''}>58 mm</option><option value="80mm" ${db.settings.print.paper==='80mm'?'selected':''}>80 mm</option></select></div></div><div class="field"><label>Prazo estimado padrão</label><input autocomplete="off" id="printEstimatedTime" value="${esc(db.settings.print.estimatedTime||'')}" placeholder="Ex.: 30 a 45 minutos"></div><div class="field"><label>Organização dos dados</label><div class="chips">${[['produto','Produtos'],['adicionais','Adicionais'],['cliente','Cliente'],['endereco','Endereço'],['pagamento','Pagamento'],['total','Total']].map(([v,n])=>`<label class="chip"><input type="checkbox" data-printpart="${v}" ${db.settings.print.order.split(',').includes(v)?'checked':''}> ${n}</label>`).join('')}</div></div><button class="primary" id="savePrintSettings">Salvar configurações de impressão</button></div></details>
+ <details><summary>Backup e segurança</summary><div class="settings-content"><p class="meta">Baixa um arquivo com uma cópia de tudo que está cadastrado (produtos, categorias, clientes, matérias-primas, cupons, pedidos etc.), pra guardar como segurança. Não substitui a sincronização com o Supabase — é só uma cópia extra, pra você guardar onde quiser.</p><button type="button" class="primary" id="downloadBackup">💾 Baixar backup completo</button></div></details>
  </div>`;
 }
 
@@ -2828,6 +3007,14 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  ['fName','fPhone','fAddress','fNumber','fComplement','fChangeFor','fNotes'].forEach(fid=>document.getElementById(fid)?.addEventListener('input',e=>{let m={fName:'name',fPhone:'phone',fAddress:'address',fNumber:'number',fComplement:'complement',fChangeFor:'changeFor',fNotes:'notes'};if(fid==='fChangeFor'){moneyMaskOnInput(e);window.checkoutDraft.changeFor=e.target.value===''?'':moneyMaskParse(e.target.value)}else{window.checkoutDraft[m[fid]]=fid==='fPhone'?fmtPhone(e.target.value):e.target.value}}));
  document.getElementById('fNeighborhood')?.addEventListener('change',e=>window.checkoutDraft.neighborhood=e.target.value);
  document.getElementById('fUseCredit')?.addEventListener('change',e=>{window.checkoutDraft.useCredit=e.target.checked;render()});
+ document.getElementById('applyCoupon')?.addEventListener('click',()=>{
+  const code=(document.getElementById('fCoupon')?.value||'').trim().toUpperCase();
+  const r=validateCoupon(code);
+  window.checkoutDraft.couponCode=code;
+  window.checkoutDraft.couponOk=r.ok;
+  window.checkoutDraft.couponMsg=r.ok?`Cupom aplicado! ${r.coupon.type==='percent'?r.coupon.value+'% de desconto':money(r.coupon.value)+' de desconto'}`:r.error;
+  render();
+ });
  document.querySelectorAll('[data-delivery]').forEach(e=>e.onclick=()=>{window.checkoutDraft.delivery=e.dataset.delivery;render()});document.querySelectorAll('[data-payment]').forEach(e=>e.onclick=()=>{window.checkoutDraft.payment=e.dataset.payment;render()});document.getElementById('submitOrder')?.addEventListener('click',submitCustomerOrder);
  document.querySelectorAll('[data-useaddr]').forEach(e=>e.onclick=()=>{const d=window.checkoutDraft,aid=e.dataset.useaddr;d.selectedAddressId=aid;if(aid!=='novo'){const session=loggedCustomer(),a=customerAddresses(session).find(x=>x.id===aid);if(a){d.address=a.street;d.number=a.number;d.complement=a.complement;d.neighborhood=a.neighborhood}}else{d.address='';d.number='';d.complement='';d.neighborhood=''}render()});
  document.getElementById('checkoutLogout')?.addEventListener('click',(e)=>{e.preventDefault();clearClientSession();window.checkoutDraft.name='';window.checkoutDraft.phone='';window.checkoutDraft.selectedAddressId='novo';render()});
@@ -2883,7 +3070,7 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
   else if(catEl)catId=catEl.value;
   if(!name||!(price>0)||!catId){formErr='Preencha nome, categoria e preço.';render();return}
   let type=document.getElementById('npType')?.value==='pi'?'pi':'pa';
-  db.products.push({id:id('p'),cat:catId,name,price,oldPrice,stock,desc,type,active:document.getElementById('npActive')?.checked!==false,showStock:document.getElementById('npShowStock')?.checked||false,addons,packageType:document.getElementById('npPackageType')?.value||'',photo:window.npPhotoData||null});
+  db.products.push({id:id('p'),cat:catId,name,price,oldPrice,stock,desc,type,active:document.getElementById('npActive')?.checked!==false,showStock:document.getElementById('npShowStock')?.checked||false,addons,packageType:document.getElementById('npPackageType')?.value||'',lowStockThreshold:Math.max(0,Number(document.getElementById('npLowStock')?.value||0))||null,photo:window.npPhotoData||null});
   window.npPhotoData=null;formErr='';overlay=null;save();render()
  });
  document.querySelectorAll('[data-editprod]').forEach(e=>e.onclick=()=>{window.editingProduct=e.dataset.editprod;window.epPhotoData=null;window.epTypeSelected=null;const p=db.products.find(x=>x.id===e.dataset.editprod);window.epSnapshot=p?JSON.parse(JSON.stringify(p)):null;window.epIsNewDup=false;formErr='';overlay='editProduct';render()});
@@ -2935,7 +3122,7 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  document.getElementById('epOldPrice')?.addEventListener('input',moneyMaskOnInput);
  document.getElementById('epNewCatToggle')?.addEventListener('click',()=>{const wrap=document.getElementById('epNewCatWrap');if(!wrap)return;const showing=wrap.style.display!=='none';wrap.style.display=showing?'none':'block';if(!showing)document.getElementById('epNewCatName')?.focus()});
  document.getElementById('epPackageType')?.addEventListener('change',e=>handlePackageTypeSelect(e.target));
- document.getElementById('saveEditProduct')?.addEventListener('click',()=>{let p=db.products.find(x=>x.id===window.editingProduct);if(!p)return;let name=epName.value.trim(),price=moneyMaskParse(epPrice.value),oldPrice=Math.max(0,moneyMaskParse(document.getElementById('epOldPrice')?.value)),stock=Math.max(0,Number(epStock.value||0));let newCatEl=document.getElementById('epNewCatName'),newCatName=newCatEl?newCatEl.value.trim():'';let catEl=document.getElementById('epCat'),catId=null;if(newCatName){let c=findOrCreateCategoryByName(newCatName);catId=c?.id||null}else if(catEl)catId=catEl.value;if(!name||!(price>0)||!catId){formErr='Informe nome, categoria e preço válidos.';render();return}p.name=name;p.cat=catId;p.price=price;p.oldPrice=oldPrice;p.type=document.getElementById('epType')?.value==='pi'?'pi':'pa';if(!productHasRecipe(p))p.stock=stock;p.desc=epDesc.value.trim();p.showStock=document.getElementById('epShowStock')?.checked||false;p.active=document.getElementById('epActive')?.checked||false;p.packageType=document.getElementById('epPackageType')?.value||'';p.addons=[...document.querySelectorAll('[data-editaddon]:checked')].map(x=>{let aid=x.dataset.editaddon,a=db.addons.find(y=>y.id===aid),el=document.getElementById('editAddonMax_'+aid),mx=Math.max(1,Math.min(a?a.max:1,Number(el?.textContent||1)));return {id:aid,max:mx}});if(window.epPhotoData)p.photo=window.epPhotoData;window.epPhotoData=null;window.epSnapshot=null;window.epIsNewDup=false;formErr='';overlay=null;window.editingProduct=null;save();render()});
+ document.getElementById('saveEditProduct')?.addEventListener('click',()=>{let p=db.products.find(x=>x.id===window.editingProduct);if(!p)return;let name=epName.value.trim(),price=moneyMaskParse(epPrice.value),oldPrice=Math.max(0,moneyMaskParse(document.getElementById('epOldPrice')?.value)),stock=Math.max(0,Number(epStock.value||0));let newCatEl=document.getElementById('epNewCatName'),newCatName=newCatEl?newCatEl.value.trim():'';let catEl=document.getElementById('epCat'),catId=null;if(newCatName){let c=findOrCreateCategoryByName(newCatName);catId=c?.id||null}else if(catEl)catId=catEl.value;if(!name||!(price>0)||!catId){formErr='Informe nome, categoria e preço válidos.';render();return}p.name=name;p.cat=catId;p.price=price;p.oldPrice=oldPrice;p.type=document.getElementById('epType')?.value==='pi'?'pi':'pa';if(!productHasRecipe(p))p.stock=stock;p.desc=epDesc.value.trim();p.showStock=document.getElementById('epShowStock')?.checked||false;p.active=document.getElementById('epActive')?.checked||false;p.packageType=document.getElementById('epPackageType')?.value||'';p.lowStockThreshold=Math.max(0,Number(document.getElementById('epLowStock')?.value||0))||null;p.addons=[...document.querySelectorAll('[data-editaddon]:checked')].map(x=>{let aid=x.dataset.editaddon,a=db.addons.find(y=>y.id===aid),el=document.getElementById('editAddonMax_'+aid),mx=Math.max(1,Math.min(a?a.max:1,Number(el?.textContent||1)));return {id:aid,max:mx}});if(window.epPhotoData)p.photo=window.epPhotoData;window.epPhotoData=null;window.epSnapshot=null;window.epIsNewDup=false;formErr='';overlay=null;window.editingProduct=null;save();render()});
  document.getElementById('deleteProduct')?.addEventListener('click',()=>{let p=db.products.find(x=>x.id===window.editingProduct);if(!p)return;if(!confirm('Excluir "'+p.name+'"? Esta ação não pode ser desfeita.'))return;db.products=db.products.filter(x=>x.id!==p.id);overlay=null;window.editingProduct=null;window.epSnapshot=null;window.epIsNewDup=false;save();render()});
  document.querySelectorAll('[data-estoque-view]').forEach(e=>e.onclick=()=>{window.estoqueView=e.dataset.estoqueView;formErr='';render()});
  bindItemPickerResults();
@@ -3128,7 +3315,7 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  if(!window._lockMenuBound){window._lockMenuBound=true;document.addEventListener('click',ev=>{if(!ev.target.closest('.lock-menu')&&window.stockLockMenuOpen){window.stockLockMenuOpen=false;document.getElementById('stockLockMenu')?.classList.remove('show')}})}
  document.querySelectorAll('[data-togglecat]').forEach(e=>e.addEventListener('click',()=>{const c=db.categories.find(x=>x.id===e.dataset.togglecat);if(!c)return;c.active=c.active===false?true:false;save();render()}));
  document.querySelectorAll('[data-editcat]').forEach(e=>e.addEventListener('click',()=>{window.editingCategory=e.dataset.editcat;formErr='';overlay='editCategory';render()}));
- document.getElementById('saveEditCategory')?.addEventListener('click',()=>{const c=db.categories.find(x=>x.id===window.editingCategory);if(!c)return;const name=document.getElementById('ecName').value.trim();if(!name){formErr='Informe o nome da categoria.';render();return}c.name=name;c.active=!!document.getElementById('ecActive')?.checked;formErr='';overlay=null;window.editingCategory=null;save();render()});
+ document.getElementById('saveEditCategory')?.addEventListener('click',()=>{const c=db.categories.find(x=>x.id===window.editingCategory);if(!c)return;const name=document.getElementById('ecName').value.trim();if(!name){formErr='Informe o nome da categoria.';render();return}c.name=name;c.active=!!document.getElementById('ecActive')?.checked;c.upsell=!!document.getElementById('ecUpsell')?.checked;formErr='';overlay=null;window.editingCategory=null;save();render()});
  document.getElementById('deleteCategory')?.addEventListener('click',()=>{const c=db.categories.find(x=>x.id===window.editingCategory);if(!c)return;if(db.products.some(p=>p.cat===c.id))return;if(!confirm('Excluir a categoria "'+c.name+'"? Esta ação não pode ser desfeita.'))return;db.categories=db.categories.filter(x=>x.id!==c.id);overlay=null;window.editingCategory=null;save();render()});
  document.querySelectorAll('[data-togglestockprod]').forEach(e=>e.addEventListener('click',()=>{const p=db.products.find(x=>x.id===e.dataset.togglestockprod);if(!p)return;p.active=!p.active;save();render()}));
  document.querySelectorAll('[data-delprodstock]').forEach(e=>e.addEventListener('click',()=>{const p=db.products.find(x=>x.id===e.dataset.delprodstock);if(!p)return;if(!confirm('Excluir "'+p.name+'"? Esta ação não pode ser desfeita.'))return;db.products=db.products.filter(x=>x.id!==p.id);save();render()}));
@@ -3187,6 +3374,18 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  document.getElementById('applyCashReport')?.addEventListener('click',()=>{const t=new Date().toISOString().slice(0,10);window.cashReportFilter={from:cashRfFrom.value||t,to:cashRfTo.value||t};render()});
  document.querySelectorAll('[data-cashquick]').forEach(e=>e.onclick=()=>{const t=new Date(),todayStr=t.toISOString().slice(0,10);let from=todayStr;if(e.dataset.cashquick==='7d'){const d=new Date(t);d.setDate(d.getDate()-6);from=d.toISOString().slice(0,10)}else if(e.dataset.cashquick==='30d'){const d=new Date(t);d.setDate(d.getDate()-29);from=d.toISOString().slice(0,10)}window.cashReportFilter={from,to:todayStr};render()});
  document.getElementById('saveAdminWa')?.addEventListener('click',()=>{if(!validPhone(adminWa.value)){alert('Informe DDD + 9 dígitos. Ex.: 98912345678.');return}db.settings.adminWhatsApp=fmtPhone(adminWa.value);save();alert('WhatsApp do administrador salvo.');render()});document.getElementById('savePrintSettings')?.addEventListener('click',()=>{db.settings.print.font=printFont.value;db.settings.print.paper=printPaper.value;db.settings.print.estimatedTime=printEstimatedTime.value;db.settings.print.order=[...document.querySelectorAll('[data-printpart]:checked')].map(x=>x.dataset.printpart).join(',');save();alert('Configurações de impressão salvas.');render()});document.getElementById('saveMessages')?.addEventListener('click',()=>{db.settings.messages.saudacao=msgSaudacao.value;db.settings.messages.retirada=msgRetirada.value;db.settings.messages.entrega=msgEntrega.value;db.settings.messages.mesa=msgMesa.value;db.settings.messages.encerramento=msgEncerramento.value;db.settings.messages.cancelamento=msgCancelamento.value;db.settings.messages.fechado=msgFechado.value;save();alert('Textos de notificação salvos.');render()});
+ document.getElementById('downloadBackup')?.addEventListener('click',()=>{
+  try{
+   const dataStr=JSON.stringify(db,null,2);
+   const blob=new Blob([dataStr],{type:'application/json'});
+   const url=URL.createObjectURL(blob);
+   const a=document.createElement('a');
+   const stamp=new Date().toISOString().slice(0,10);
+   a.href=url;a.download=`backup-novo-cheff-bbq-${stamp}.json`;
+   document.body.appendChild(a);a.click();document.body.removeChild(a);
+   URL.revokeObjectURL(url);
+  }catch(e){alert('Não foi possível gerar o backup. Tente novamente.')}
+ });
  document.querySelectorAll('[data-cadastro-view]').forEach(e=>e.onclick=()=>{tab='cadastro';window.cadastroView=e.dataset.cadastroView;window.adminOpsOpen=false;render()});
  document.getElementById('custNeighborhood')?.addEventListener('change',e=>{
   if(e.target.value==='__new__'){window.custDraft={name:custName.value,phone:custPhone.value,street:custStreet.value,number:custNumber.value,complement:custComplement.value,reference:custReference.value,neighborhood:''};window.newNbDraft={};window.neighborhoodDialogTarget='cust';formErr='';overlay='addNeighborhoodQuick';render();return}
@@ -3227,7 +3426,7 @@ document.getElementById('deleteAddonDialog')?.addEventListener('click',()=>{if(!
  document.getElementById('deleteSupplierDialog')?.addEventListener('click',()=>{if(!window.editingSupplier)return;if(!confirm('Excluir este fornecedor?'))return;db.suppliers=db.suppliers.filter(x=>x.id!==window.editingSupplier);window.editingSupplier=null;window.supplierDraft={};overlay=null;save();render()});
  document.getElementById('newMateriaBtn')?.addEventListener('click',()=>{window.editingMateria=null;window.materiaDraft={};formErr='';overlay='materiaDialog';render()});
  document.querySelectorAll('[data-clickmateria]').forEach(e=>e.onclick=()=>{let mid=e.dataset.clickmateria;let m=db.ingredients.find(x=>x.id===mid);if(!m)return;window.editingMateria=mid;window.materiaDraft={name:m.name,unit:m.unit,stock:m.stock,cost:m.cost};formErr='';overlay='materiaDialog';render()});
- document.getElementById('saveMateriaDialog')?.addEventListener('click',()=>{let n=document.getElementById('dialogMatName').value.trim(),unit=document.getElementById('dialogMatUnit').value.trim(),stockRaw=document.getElementById('dialogMatStock').value,costRaw=document.getElementById('dialogMatCost').value,stock=Math.max(0,Number(stockRaw||0)),cost=Math.max(0,parseFloat(String(costRaw||'0').replace(',','.'))||0);window.materiaDraft={name:n,unit,stock:stockRaw,cost:costRaw};if(!n||!unit){formErr='Informe nome e unidade de medida.';render();return}if(window.editingMateria){let m=db.ingredients.find(x=>x.id===window.editingMateria);if(!m)return;m.name=n;m.unit=unit;m.stock=stock;m.cost=cost;window.editingMateria=null}else{db.ingredients.push({id:uuidLike(),name:n,unit,stock,cost,active:true})}window.materiaDraft={};formErr='';overlay=null;save();render()});
+ document.getElementById('saveMateriaDialog')?.addEventListener('click',()=>{let n=document.getElementById('dialogMatName').value.trim(),unit=document.getElementById('dialogMatUnit').value.trim(),stockRaw=document.getElementById('dialogMatStock').value,costRaw=document.getElementById('dialogMatCost').value,stock=Math.max(0,Number(stockRaw||0)),cost=Math.max(0,parseFloat(String(costRaw||'0').replace(',','.'))||0),lowStock=Math.max(0,Number(document.getElementById('dialogMatLowStock')?.value||0))||null;window.materiaDraft={name:n,unit,stock:stockRaw,cost:costRaw,lowStockThreshold:lowStock};if(!n||!unit){formErr='Informe nome e unidade de medida.';render();return}if(window.editingMateria){let m=db.ingredients.find(x=>x.id===window.editingMateria);if(!m)return;m.name=n;m.unit=unit;m.stock=stock;m.cost=cost;m.lowStockThreshold=lowStock;window.editingMateria=null}else{db.ingredients.push({id:uuidLike(),name:n,unit,stock,cost,active:true,lowStockThreshold:lowStock})}window.materiaDraft={};formErr='';overlay=null;save();render()});
  document.getElementById('deleteMateriaDialog')?.addEventListener('click',()=>{if(!window.editingMateria)return;let mid=window.editingMateria;if(!confirm('Excluir esta matéria-prima? Receitas que a usam também serão afetadas.'))return;db.ingredients=db.ingredients.filter(x=>x.id!==mid);db.products.forEach(p=>{p.recipe=(p.recipe||[]).filter(r=>r.ingredientId!==mid)});window.editingMateria=null;window.materiaDraft={};overlay=null;save();render()});
  document.querySelectorAll('[data-editrecipe]').forEach(e=>e.onclick=(ev)=>{if(ev.target.closest('button'))return;let pid=e.dataset.editrecipe;let p=db.products.find(x=>x.id===pid);if(!p)return;window.editingProduct=pid;window.recipeForProduct=pid;overlay='editProduct';render()});
  document.querySelectorAll('[data-addrecipe]').forEach(e=>e.onclick=(ev)=>{ev.stopPropagation();let pid=e.dataset.addrecipe;let p=db.products.find(x=>x.id===pid);if(!p)return;if(!p.recipe)p.recipe=[];window.editingProduct=pid;window.recipeForProduct=pid;window.editingRecipeIdx=null;window.recipeDraftKind=null;overlay='recipeDialog';save();render()});
@@ -3239,6 +3438,34 @@ document.getElementById('deleteAddonDialog')?.addEventListener('click',()=>{if(!
  document.getElementById('pmFixed')?.addEventListener('input',moneyMaskOnInput);
  document.getElementById('savePaymentMethod')?.addEventListener('click',()=>{let n=document.getElementById('pmName').value.trim();if(!n){formErr='Informe o nome da forma de pagamento.';render();return}const sign=(window.paymentMethodDraft?.adjustType==='desconto')?-1:1;const fee=sign*Math.abs(Number(document.getElementById('pmPercent').value||0));const feeFixed=sign*moneyMaskParse(document.getElementById('pmFixed').value);const showClient=document.getElementById('pmShowClient')?.checked??true;if(window.editingPaymentMethod){let p=db.payments.find(x=>x.id===window.editingPaymentMethod);if(!p)return;p.name=n;p.fee=fee;p.feeFixed=feeFixed;p.showClient=showClient;window.editingPaymentMethod=null}else{db.payments.push({id:id('pay'),name:n,fee,feeFixed,active:true,showClient})}window.paymentMethodDraft={};formErr='';overlay=null;save();render()});
  document.getElementById('deletePaymentMethod')?.addEventListener('click',()=>{if(!window.editingPaymentMethod)return;if(!confirm('Excluir esta forma de pagamento?'))return;db.payments=db.payments.filter(x=>x.id!==window.editingPaymentMethod);window.editingPaymentMethod=null;window.paymentMethodDraft={};overlay=null;save();render()});
+ document.getElementById('newCouponBtn')?.addEventListener('click',()=>{window.editingCoupon=null;window.couponDraft={type:'percent',active:true};formErr='';overlay='couponDialog';render()});
+ document.querySelectorAll('[data-clickcoupon]').forEach(e=>e.onclick=()=>{let c=db.coupons.find(x=>x.id===e.dataset.clickcoupon);if(!c)return;window.editingCoupon=c.id;window.couponDraft={code:c.code,type:c.type,value:c.value,maxUses:c.maxUses||'',expiresAt:c.expiresAt||'',active:c.active};formErr='';overlay='couponDialog';render()});
+ document.querySelectorAll('[data-togglecoupon]').forEach(e=>e.onclick=()=>{let c=db.coupons.find(x=>x.id===e.dataset.togglecoupon);if(!c)return;c.active=!c.active;save();render()});
+ document.querySelectorAll('[data-delcoupon]').forEach(e=>e.onclick=()=>{let c=db.coupons.find(x=>x.id===e.dataset.delcoupon);if(!c)return;if(!confirm(`Excluir o cupom "${c.code}"?`))return;db.coupons=db.coupons.filter(x=>x.id!==c.id);save();render()});
+ document.querySelectorAll('[data-coupontype]').forEach(e=>e.onclick=()=>{window.couponDraft=window.couponDraft||{};window.couponDraft.code=document.getElementById('couponCode')?.value;window.couponDraft.maxUses=document.getElementById('couponMaxUses')?.value;window.couponDraft.expiresAt=document.getElementById('couponExpires')?.value;window.couponDraft.active=document.getElementById('couponActive')?.checked;window.couponDraft.type=e.dataset.coupontype;window.couponDraft.value='';render()});
+ document.getElementById('couponValue')?.addEventListener('input',e=>{if((window.couponDraft?.type||'percent')==='fixed')moneyMaskOnInput(e)});
+ document.getElementById('saveCoupon')?.addEventListener('click',()=>{
+  const code=(document.getElementById('couponCode')?.value||'').trim().toUpperCase();
+  const type=(window.couponDraft?.type||'percent')==='fixed'?'fixed':'percent';
+  const value=type==='fixed'?moneyMaskParse(document.getElementById('couponValue')?.value):Number(document.getElementById('couponValue')?.value||0);
+  const maxUses=Number(document.getElementById('couponMaxUses')?.value||0)||null;
+  const expiresAt=document.getElementById('couponExpires')?.value||'';
+  const active=document.getElementById('couponActive')?.checked!==false;
+  if(!code){formErr='Informe o código do cupom.';render();return}
+  if(!(value>0)){formErr='Informe um valor de desconto válido.';render();return}
+  const dup=db.coupons.find(x=>x.code===code&&x.id!==window.editingCoupon);
+  if(dup){formErr='Já existe um cupom com esse código.';render();return}
+  if(window.editingCoupon){
+   let c=db.coupons.find(x=>x.id===window.editingCoupon);
+   if(!c)return;
+   c.code=code;c.type=type;c.value=value;c.maxUses=maxUses;c.expiresAt=expiresAt;c.active=active;
+   window.editingCoupon=null;
+  }else{
+   db.coupons.push({id:id('coupon'),code,type,value,maxUses,expiresAt,active,usedCount:0});
+  }
+  window.couponDraft={};formErr='';overlay=null;save();render();
+ });
+ document.getElementById('deleteCoupon')?.addEventListener('click',()=>{if(!window.editingCoupon)return;let c=db.coupons.find(x=>x.id===window.editingCoupon);if(!c)return;if(!confirm(`Excluir o cupom "${c.code}"?`))return;db.coupons=db.coupons.filter(x=>x.id!==window.editingCoupon);window.editingCoupon=null;window.couponDraft={};overlay=null;save();render()});
  document.getElementById('saveCustomerDialog')?.addEventListener('click',()=>{let n=custName.value.trim(),ph=custPhone.value.trim(),street=custStreet.value.trim(),num=custNumber.value.trim(),comp=custComplement.value.trim(),ref=custReference.value.trim(),nid=custNeighborhood.value,nb=db.neighborhoods.find(x=>x.id===nid);if(!n){formErr='Informe o nome.';render();return}if(ph&&!validPhone(ph)){formErr='WhatsApp inválido. Informe DDD + 9 dígitos.';render();return}if(!street||!num||!nid){formErr='Informe rua, número e bairro para o endereço de entrega.';render();return}if(window.editingCustomer){let c=db.customers.find(x=>x.id===window.editingCustomer);if(!c)return;c.name=n;c.phone=ph?fmtPhone(ph):'';let addr=customerDefaultAddress(c);if(addr){addr.street=street;addr.number=num;addr.complement=comp;addr.reference=ref;addr.neighborhood=nid;addr.neighborhoodName=nb.name;addr.neighborhoodFee=nb.fee}else{addr={id:id('addr'),label:'Principal',street,number:num,complement:comp,reference:ref,neighborhood:nid,neighborhoodName:nb.name,neighborhoodFee:nb.fee};c.addresses=c.addresses||[];c.addresses.push(addr);c.defaultAddressId=addr.id}syncCustomerLegacyAddress(c);window.editingCustomer=null}else{const nc=nextCustomerCode();let c={id:id('c'),codeNum:nc.codeNum,code:nc.code,name:n,phone:ph?fmtPhone(ph):'',addresses:[],defaultAddressId:'',credit:0};let addr={id:id('addr'),label:'Principal',street,number:num,complement:comp,reference:ref,neighborhood:nid,neighborhoodName:nb.name,neighborhoodFee:nb.fee};c.addresses.push(addr);c.defaultAddressId=addr.id;syncCustomerLegacyAddress(c);db.customers.push(c)}window.custDraft=null;formErr='';overlay=null;save();render()});
  document.getElementById('newCustomerBtn')?.addEventListener('click',()=>{window.editingCustomer=null;window.custDraft={};formErr='';overlay='customerDialog';render()});
  document.getElementById('custSearchInput')?.addEventListener('input',e=>{window.custSearch=e.target.value;render()});
@@ -3302,11 +3529,16 @@ async function submitCustomerOrder(){
  const fee=d.delivery==='entrega'?deliveryFee():0;
  const preCredit=cartSubtotal()+fee;
  const creditApplied=d.useCredit&&session&&session.phone===phoneFull?+Math.min(Number(session.credit||0),preCredit).toFixed(2):0;
- const base=Math.max(0,preCredit-creditApplied),total=paymentTotal(base,d.payment),nb=db.neighborhoods.find(n=>n.id===d.neighborhood);
+ const afterCredit=Math.max(0,preCredit-creditApplied);
+ const couponCheck=d.couponCode?validateCoupon(d.couponCode):null;
+ const appliedCoupon=couponCheck&&couponCheck.ok?couponCheck.coupon:null;
+ const couponApplied=appliedCoupon?couponDiscountAmount(appliedCoupon,afterCredit):0;
+ const base=Math.max(0,afterCredit-couponApplied),total=paymentTotal(base,d.payment),nb=db.neighborhoods.find(n=>n.id===d.neighborhood);
  const orderId=genOrderId('PED-');
  cart.forEach(x=>{consumeProductStock(db.products.find(p=>p.id===x.productId),x.qty,{orderId});x.addons.forEach(a=>db.addons.find(q=>q.id===a.id).stock-=a.qty*x.qty)});
- let o={id:orderId,createdAt:new Date().toISOString(),source:'online',customer:{name:d.name.trim(),phone:phoneFull,delivery:d.delivery,table:d.table,address:d.address,number:d.number,neighborhood:d.neighborhood,neighborhoodName:nb?.name||'',deliveryFee:fee,complement:d.complement,payment:d.payment,changeFor:d.changeFor||'',notes:d.notes},items:cart,total,discount:creditApplied,creditUsed:creditApplied,status:'recebido',riderId:null,paid:false};db.orders.push(o);
+ let o={id:orderId,createdAt:new Date().toISOString(),source:'online',customer:{name:d.name.trim(),phone:phoneFull,delivery:d.delivery,table:d.table,address:d.address,number:d.number,neighborhood:d.neighborhood,neighborhoodName:nb?.name||'',deliveryFee:fee,complement:d.complement,payment:d.payment,changeFor:d.changeFor||'',notes:d.notes},items:cart,total,discount:creditApplied+couponApplied,creditUsed:creditApplied,couponCode:appliedCoupon?appliedCoupon.code:'',couponDiscount:couponApplied,status:'recebido',riderId:null,paid:false};db.orders.push(o);
  if(creditApplied>0&&session){session.credit=+Math.max(0,Number(session.credit||0)-creditApplied).toFixed(2)}
+ if(appliedCoupon){appliedCoupon.usedCount=(Number(appliedCoupon.usedCount)||0)+1}
  let c=findOrCreateCustomerByPhone(d.name.trim(),phoneFull);
  if(d.delivery==='entrega'&&d.address.trim()&&d.number.trim()&&d.neighborhood){
   if(d.selectedAddressId&&d.selectedAddressId!=='novo'&&customerAddresses(c).some(a=>a.id===d.selectedAddressId)){
