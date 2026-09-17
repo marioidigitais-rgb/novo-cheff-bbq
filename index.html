@@ -472,9 +472,19 @@ async function saveOrderToSupabase(o){
   if(addrIns.error)console.error('Não foi possível salvar o endereço do pedido '+o.id+' no Supabase:',addrIns.error);
  }
  const subtotal=o.items.reduce((s,x)=>s+x.price*x.qty+(x.addons||[]).reduce((a,b)=>a+b.price*b.qty*x.qty,0),0);
- const orderRow={id:o.id,source:o.source||'online',status:o.status,customer_id:customerRow?.id||null,customer_name:o.customer.name,customer_phone:o.customer.phone||'',delivery_type:o.customer.delivery,table_name:o.customer.table||'',address:o.customer.address||'',number:o.customer.number||'',complement:o.customer.complement||'',neighborhood_id:o.customer.neighborhood||null,neighborhood_name:o.customer.neighborhoodName||'',delivery_fee:o.customer.deliveryFee||0,notes:o.customer.notes||'',subtotal,total:o.total,paid:!!o.paid};
- const orderUp=await sb.from('orders').upsert(orderRow);
- if(orderUp.error)throw orderUp.error;
+ const orderRowBase={id:o.id,source:o.source||'online',status:o.status,customer_id:customerRow?.id||null,customer_name:o.customer.name,customer_phone:o.customer.phone||'',delivery_type:o.customer.delivery,table_name:o.customer.table||'',address:o.customer.address||'',number:o.customer.number||'',complement:o.customer.complement||'',neighborhood_id:o.customer.neighborhood||null,neighborhood_name:o.customer.neighborhoodName||'',delivery_fee:o.customer.deliveryFee||0,notes:o.customer.notes||'',subtotal,total:o.total,paid:!!o.paid};
+ const orderRowExtra={created_at:o.createdAt||null,discount:Number(o.discount)||0,surcharge:Number(o.surcharge)||0,tendered:Number(o.tendered)||0,coupon_code:o.couponCode||null,coupon_discount:Number(o.couponDiscount)||0,credit_used:Number(o.creditUsed)||0,rider_id:o.riderId||null,paid_at:o.paidAt||null,change_for:o.customer.changeFor||''};
+ const orderRow={...orderRowBase,...orderRowExtra};
+ try{
+  const orderUp=await sb.from('orders').upsert(orderRow);
+  if(orderUp.error)throw orderUp.error;
+ }catch(e){
+  // Algumas dessas colunas (desconto, cupom, entregador, data de criação
+  // etc.) podem não existir ainda na tabela orders do Supabase — tenta de
+  // novo só com os campos originais, pra não travar o envio do pedido.
+  const orderUp2=await sb.from('orders').upsert(orderRowBase);
+  if(orderUp2.error)throw orderUp2.error;
+ }
  const payDel=await sb.from('order_payments').delete().eq('order_id',o.id);
  if(payDel.error)throw payDel.error;
  const payRows=(o.customer.payments?.length?o.customer.payments:[{payment:o.customer.payment,amount:o.total}]).filter(p=>p.payment).map(p=>({order_id:o.id,payment_method_id:p.payment,amount:p.amount}));
@@ -495,6 +505,96 @@ async function saveOrderToSupabase(o){
   if(addonRows.length){const addonIns=await sb.from('order_item_addons').insert(addonRows);if(addonIns.error)throw addonIns.error;}
  }
  __snapCommit('order:'+o.id,o);
+}
+async function fetchOrderFromSupabase(orderId){
+ try{
+  const orderR=await sb.from('orders').select('*').eq('id',orderId).maybeSingle();
+  if(orderR.error||!orderR.data)return null;
+  const r=orderR.data;
+  const itemsR=await sb.from('order_items').select('id,product_id,product_name,unit_price,qty,notes').eq('order_id',orderId);
+  if(itemsR.error)return null;
+  const itemRows=itemsR.data||[];
+  const itemIds=itemRows.map(x=>x.id);
+  let addonsByItem={};
+  if(itemIds.length){
+   const addonsR=await sb.from('order_item_addons').select('order_item_id,addon_id,addon_name,unit_price,qty').in('order_item_id',itemIds);
+   if(!addonsR.error){(addonsR.data||[]).forEach(a=>{(addonsByItem[a.order_item_id]=addonsByItem[a.order_item_id]||[]).push({id:a.addon_id,name:a.addon_name,price:Number(a.unit_price)||0,qty:Number(a.qty)||0})})}
+  }
+  const paysR=await sb.from('order_payments').select('payment_method_id,amount').eq('order_id',orderId);
+  const payRows=paysR.error?[]:(paysR.data||[]);
+  const payments=payRows.map(p=>({payment:p.payment_method_id,amount:Number(p.amount)||0}));
+  const items=itemRows.map(x=>({productId:x.product_id,name:x.product_name,price:Number(x.unit_price)||0,qty:Number(x.qty)||0,addons:addonsByItem[x.id]||[],notes:x.notes||''}));
+  return {
+   id:r.id,
+   createdAt:r.created_at||new Date().toISOString(),
+   source:r.source||'online',
+   customer:{
+    name:r.customer_name||'',
+    phone:r.customer_phone||'',
+    delivery:r.delivery_type||'retirada',
+    table:r.table_name||'',
+    address:r.address||'',
+    number:r.number||'',
+    complement:r.complement||'',
+    neighborhood:r.neighborhood_id||'',
+    neighborhoodName:r.neighborhood_name||'',
+    deliveryFee:Number(r.delivery_fee)||0,
+    payment:payments[0]?.payment||'',
+    payments,
+    changeFor:r.change_for||'',
+    notes:r.notes||''
+   },
+   items,
+   total:Number(r.total)||0,
+   discount:Number(r.discount)||0,
+   surcharge:Number(r.surcharge)||0,
+   tendered:Number(r.tendered)||0,
+   couponCode:r.coupon_code||'',
+   couponDiscount:Number(r.coupon_discount)||0,
+   creditUsed:Number(r.credit_used)||0,
+   status:r.status||'recebido',
+   riderId:r.rider_id||null,
+   paid:!!r.paid,
+   paidAt:r.paid_at||null
+  };
+ }catch(e){console.error('Não foi possível buscar o pedido '+orderId+' do Supabase:',e);return null}
+}
+async function pullOrderIntoLocal(orderId,forceUpdate){
+ const exists=db.orders.some(o=>o.id===orderId);
+ if(exists&&!forceUpdate)return false;
+ const o=await fetchOrderFromSupabase(orderId);
+ if(!o)return false;
+ if(exists){
+  const idx=db.orders.findIndex(x=>x.id===orderId);
+  db.orders[idx]=o;
+ }else{
+  db.orders.push(o);
+ }
+ __snapCommit('order:'+o.id,o);
+ localStorage.setItem(KEY,JSON.stringify(db));
+ window.lastSeenOrderCount=db.orders.length;
+ return !exists;
+}
+async function syncMissingOrdersFromSupabase(){
+ if(!(route==='admin'&&adminAuth))return;
+ try{
+  let idsR=await sb.from('orders').select('id').order('created_at',{ascending:false}).limit(500);
+  if(idsR.error){
+   // A coluna "created_at" pode não existir ainda — tenta de novo sem
+   // ordenar por ela, pra essa verificação não parar de funcionar.
+   idsR=await sb.from('orders').select('id').limit(500);
+  }
+  if(idsR.error||!idsR.data)return;
+  const localIds=new Set(db.orders.map(o=>o.id));
+  const missingIds=idsR.data.map(x=>x.id).filter(oid=>!localIds.has(oid));
+  if(!missingIds.length)return;
+  let addedAny=false;
+  for(const oid of missingIds){
+   const added=await pullOrderIntoLocal(oid);
+   if(added)addedAny=true;
+  }
+  if(addedAny){playBell();render()}
+ }catch(e){}
 }
 
 // ================= SINCRONIZAÇÃO COMPLETA COM O SUPABASE =================
@@ -787,14 +887,23 @@ function startSupabaseRealtime(){
  try{
   sb.channel('pedidos-mudou')
    .on('postgres_changes',{event:'*',schema:'public',table:'orders'},payload=>{
-    // Se o pedido já existir localmente, não sobrescreve o carrinho/itens
-    // (que só o dono do pedido tem em memória) — só avisa que algo mudou
-    // no Supabase; quem precisa dos detalhes completos é o painel admin,
-    // que já lê os pedidos do localStorage/armazenamento local.
-    if(route==='admin'&&adminAuth)playBell();
+    // Busca o pedido completo (itens, adicionais, pagamentos) e só toca o
+    // aviso sonoro se ele realmente for novo por aqui — assim um pedido
+    // feito no celular do cliente chega de verdade no painel do admin,
+    // não só o som sem o pedido atrás.
+    if(!(route==='admin'&&adminAuth))return;
+    const oid=payload?.new?.id||payload?.record?.id;
+    if(!oid)return;
+    pullOrderIntoLocal(oid,payload.eventType==='UPDATE').then(isNew=>{
+     if(isNew)playBell();
+     render();
+    });
    })
    .subscribe();
  }catch(e){console.error('Não foi possível ativar a atualização em tempo real do Supabase:',e)}
+ clearInterval(window.__orderPollTimer);
+ window.__orderPollTimer=setInterval(syncMissingOrdersFromSupabase,20000);
+ syncMissingOrdersFromSupabase();
 }
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=n=>'R$ '+Number(n||0).toFixed(2).replace('.',',');
@@ -3034,7 +3143,7 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  document.getElementById('openClientLogin')?.addEventListener('click',()=>{overlay='clientLogin';formErr='';render()});
  document.getElementById('clientLogout')?.addEventListener('click',()=>{clearClientSession();render()});
  document.getElementById('doClientLogin')?.addEventListener('click',()=>{const ph=document.getElementById('loginPhone')?.value||'';if(!validPhone(ph)){formErr='WhatsApp inválido. Use DDD + 9 dígitos.';render();return}const full=fmtPhone(ph),c=db.customers.find(x=>x.phone===full);if(!c){formErr='Nenhum cadastro encontrado com este WhatsApp.';render();return}setClientSession(c.id);overlay=null;formErr='';render()});
- document.getElementById('doLogin')?.addEventListener('click',()=>{if(document.getElementById('adminPass').value===ADMIN_PASSWORD){adminAuth=true;formErr='';render()}else{formErr='Senha incorreta.';render()}});
+ document.getElementById('doLogin')?.addEventListener('click',()=>{if(document.getElementById('adminPass').value===ADMIN_PASSWORD){adminAuth=true;formErr='';render();syncMissingOrdersFromSupabase()}else{formErr='Senha incorreta.';render()}});
  document.getElementById('logout')?.addEventListener('click',()=>{adminAuth=false;location.hash=ADMIN_ROUTE_HASH;render()});
  document.querySelectorAll('[data-tab]').forEach(e=>e.onclick=()=>{const t=e.dataset.tab;if(t==='cadastro'||t==='relatorios'||t==='caixa'){window.navOpen=window.navOpen||{};window.navOpen[t]=!window.navOpen[t];render();return}tab=t;window.adminOpsOpen=false;render()});
  document.querySelectorAll('#mobileAdminNav [data-tab]').forEach(e=>e.onclick=()=>{const t=e.dataset.tab;if(t==='cadastro'||t==='relatorios'||t==='caixa'){window.navOpen=window.navOpen||{};window.navOpen[t]=!window.navOpen[t];render();return}tab=t;mobileAdminNavOpen=false;render()});
