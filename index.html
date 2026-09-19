@@ -436,6 +436,27 @@ async function loadMenuFromSupabase(){
     db.coupons=couR.data.map(c=>({id:c.id,code:String(c.code||'').toUpperCase(),type:c.type==='fixed'?'fixed':'percent',value:Number(c.value)||0,active:c.active!==false,maxUses:c.max_uses||null,usedCount:Number(c.used_count)||0,expiresAt:c.expires_at||''}));
    }
   }catch(e){}
+  try{
+   // Busca entregadores, fornecedores e o status do caixa à parte, do
+   // mesmo jeito protegido — se alguma dessas tabelas ainda não existir,
+   // essa consulta falha sozinha sem derrubar o restante do carregamento.
+   const ridersR=await sb.from('riders').select('id,name,phone,plate,active,created_at');
+   if(!ridersR.error&&ridersR.data&&ridersR.data.length){
+    db.riders=ridersR.data.map(r=>({id:r.id,name:r.name,phone:r.phone||'',plate:r.plate||null,active:r.active!==false,createdAt:r.created_at||new Date().toISOString()}));
+   }
+  }catch(e){}
+  try{
+   const supR=await sb.from('suppliers').select('id,description,cnpj,phone,ie,street,number,neighborhood,cep');
+   if(!supR.error&&supR.data&&supR.data.length){
+    db.suppliers=supR.data.map(s=>({id:s.id,desc:s.description||'',cnpj:s.cnpj||'',phone:s.phone||'',ie:s.ie||'',street:s.street||'',number:s.number||'',neighborhood:s.neighborhood||'',cep:s.cep||''}));
+   }
+  }catch(e){}
+  try{
+   const cashR=await sb.from('cash_register').select('*').eq('id',1).maybeSingle();
+   if(!cashR.error&&cashR.data){
+    db.cash={open:!!cashR.data.open,initial:Number(cashR.data.initial)||0,movements:(()=>{try{return JSON.parse(cashR.data.movements||'[]')}catch(e){return db.cash.movements||[]}})()};
+   }
+  }catch(e){}
   const hoursObj={};(hoursR.data||[]).forEach(h=>{hoursObj[h.weekday]={open:(h.open_time||'').slice(0,5),close:(h.close_time||'').slice(0,5),active:h.active}});
   if(Object.keys(hoursObj).length)db.hours=hoursObj;
   if((tablesR.data||[]).length)db.tables=tablesR.data.map(t=>t.name);
@@ -833,6 +854,96 @@ async function syncSettingsToSupabase(){
  if(r.error)throw r.error;
  __snapCommit('settings',db.settings);
 }
+async function syncRidersToSupabase(){
+ if(__snapEquals('riders',db.riders))return;
+ try{
+  const rows=db.riders.map(r=>({id:r.id,name:r.name,phone:r.phone||'',plate:r.plate||null,active:r.active!==false,created_at:r.createdAt||null}));
+  await __upsertAndPrune('riders',rows);
+  __snapCommit('riders',db.riders);
+ }catch(e){
+  console.error('Não foi possível sincronizar os entregadores com o Supabase:',e);
+ }
+}
+async function syncSuppliersToSupabase(){
+ if(__snapEquals('suppliers',db.suppliers))return;
+ try{
+  const rows=db.suppliers.map(s=>({id:s.id,description:s.desc||'',cnpj:s.cnpj||'',phone:s.phone||'',ie:s.ie||'',street:s.street||'',number:s.number||'',neighborhood:s.neighborhood||'',cep:s.cep||''}));
+  await __upsertAndPrune('suppliers',rows);
+  __snapCommit('suppliers',db.suppliers);
+ }catch(e){
+  console.error('Não foi possível sincronizar os fornecedores com o Supabase:',e);
+ }
+}
+async function syncCashToSupabase(){
+ if(__snapEquals('cash',db.cash))return;
+ try{
+  const row={id:1,open:!!db.cash.open,initial:Number(db.cash.initial)||0,movements:JSON.stringify(db.cash.movements||[])};
+  const r=await sb.from('cash_register').upsert(row);
+  if(r.error)throw r.error;
+  __snapCommit('cash',db.cash);
+ }catch(e){
+  console.error('Não foi possível sincronizar o status do caixa com o Supabase:',e);
+ }
+}
+async function syncStockMovementsToSupabase(){
+ if(__snapEquals('stockMovements',db.stockMovements||[])&&__snapEquals('materiaMovements',db.materiaMovements||[]))return;
+ try{
+  const prodRows=(db.stockMovements||[]).map(m=>({id:m.id,type:m.type,occurred_at:m.date,product_id:m.productId,product_name:m.productName,unit:m.unit,qty:m.qty,unit_price:m.unitPrice,reason:m.reason||null,document:m.document||null,note:m.note||null,manual:!!m.manual,supplier_id:m.supplierId||null,supplier_name:m.supplierName||null,nf_number:m.nfNumber||null,payment_condition:m.paymentCondition||null,payment_method:m.paymentMethod||null,payment_due_date:m.paymentDueDate||null}));
+  if(prodRows.length){
+   const up=await sb.from('stock_movements').upsert(prodRows);
+   if(up.error)throw up.error;
+  }
+  const matRows=(db.materiaMovements||[]).map(m=>({id:m.id,type:m.type,occurred_at:m.date,ingredient_id:m.ingredientId,ingredient_name:m.ingredientName,unit:m.unit,qty:m.qty,unit_price:m.unitPrice,reason:m.reason||null,document:m.document||null,note:m.note||null,manual:!!m.manual,supplier_id:m.supplierId||null,supplier_name:m.supplierName||null,nf_number:m.nfNumber||null,payment_condition:m.paymentCondition||null,payment_method:m.paymentMethod||null,payment_due_date:m.paymentDueDate||null}));
+  if(matRows.length){
+   const upM=await sb.from('materia_movements').upsert(matRows);
+   if(upM.error)throw upM.error;
+  }
+  __snapCommit('stockMovements',db.stockMovements||[]);
+  __snapCommit('materiaMovements',db.materiaMovements||[]);
+ }catch(e){
+  // As tabelas stock_movements/materia_movements podem não existir ainda —
+  // os dados continuam salvos neste aparelho e a sincronização é tentada
+  // novamente na próxima alteração, sem travar o restante.
+  console.error('Não foi possível sincronizar o histórico de movimentações de estoque com o Supabase:',e);
+ }
+}
+async function syncMissingMovementsFromSupabase(){
+ if(!(route==='admin'&&adminAuth))return;
+ try{
+  const prodR=await sb.from('stock_movements').select('*').limit(1000);
+  if(!prodR.error&&prodR.data){
+   const localIds=new Set((db.stockMovements||[]).map(m=>m.id));
+   let added=false;
+   prodR.data.forEach(r=>{
+    if(!localIds.has(r.id)){
+     db.stockMovements.push({id:r.id,type:r.type,date:r.occurred_at,productId:r.product_id,productName:r.product_name,unit:r.unit,qty:Number(r.qty)||0,unitPrice:Number(r.unit_price)||0,reason:r.reason||'',document:r.document||'',note:r.note||'',manual:!!r.manual,supplierId:r.supplier_id||'',supplierName:r.supplier_name||'',nfNumber:r.nf_number||'',paymentCondition:r.payment_condition||'',paymentMethod:r.payment_method||'',paymentDueDate:r.payment_due_date||''});
+     added=true;
+    }
+   });
+   if(added)__snapCommit('stockMovements',db.stockMovements);
+  }
+  const matR=await sb.from('materia_movements').select('*').limit(1000);
+  if(!matR.error&&matR.data){
+   const localIdsM=new Set((db.materiaMovements||[]).map(m=>m.id));
+   let addedM=false;
+   matR.data.forEach(r=>{
+    if(!localIdsM.has(r.id)){
+     db.materiaMovements.push({id:r.id,type:r.type,date:r.occurred_at,ingredientId:r.ingredient_id,ingredientName:r.ingredient_name,unit:r.unit,qty:Number(r.qty)||0,unitPrice:Number(r.unit_price)||0,reason:r.reason||'',document:r.document||'',note:r.note||'',manual:!!r.manual,supplierId:r.supplier_id||'',supplierName:r.supplier_name||'',nfNumber:r.nf_number||'',paymentCondition:r.payment_condition||'',paymentMethod:r.payment_method||'',paymentDueDate:r.payment_due_date||''});
+     addedM=true;
+    }
+   });
+   if(addedM)__snapCommit('materiaMovements',db.materiaMovements);
+  }
+  try{
+   const cashR=await sb.from('cash_register').select('*').eq('id',1).maybeSingle();
+   if(!cashR.error&&cashR.data){
+    db.cash={open:!!cashR.data.open,initial:Number(cashR.data.initial)||0,movements:(()=>{try{return JSON.parse(cashR.data.movements||'[]')}catch(e){return db.cash.movements||[]}})()};
+    __snapCommit('cash',db.cash);
+   }
+  }catch(e){}
+  localStorage.setItem(KEY,JSON.stringify(db));
+ }catch(e){}
+}
 async function syncAllToSupabase(){
  await syncCategoriesToSupabase();
  await syncPackageTypesToSupabase();
@@ -847,6 +958,10 @@ async function syncAllToSupabase(){
  await syncSettingsToSupabase();
  await syncCouponsToSupabase();
  await syncCustomersToSupabase();
+ await syncRidersToSupabase();
+ await syncSuppliersToSupabase();
+ await syncCashToSupabase();
+ await syncStockMovementsToSupabase();
  for(const o of (db.orders||[])){
   if(!__snapEquals('order:'+o.id,o)){
    await saveOrderToSupabase(o);
@@ -930,8 +1045,9 @@ function startSupabaseRealtime(){
    .subscribe();
  }catch(e){console.error('Não foi possível ativar a atualização em tempo real do Supabase:',e)}
  clearInterval(window.__orderPollTimer);
- window.__orderPollTimer=setInterval(syncMissingOrdersFromSupabase,20000);
+ window.__orderPollTimer=setInterval(()=>{syncMissingOrdersFromSupabase();syncMissingMovementsFromSupabase()},20000);
  syncMissingOrdersFromSupabase();
+ syncMissingMovementsFromSupabase();
 }
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=n=>'R$ '+Number(n||0).toFixed(2).replace('.',',');
@@ -3194,7 +3310,7 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
   if(!c){formErr='Nenhum cadastro encontrado com este WhatsApp.';render();return}
   setClientSession(c.id);overlay=null;formErr='';render();
  });
- document.getElementById('doLogin')?.addEventListener('click',()=>{if(document.getElementById('adminPass').value===ADMIN_PASSWORD){adminAuth=true;formErr='';render();syncMissingOrdersFromSupabase();scheduleSupabaseSync()}else{formErr='Senha incorreta.';render()}});
+ document.getElementById('doLogin')?.addEventListener('click',()=>{if(document.getElementById('adminPass').value===ADMIN_PASSWORD){adminAuth=true;formErr='';render();syncMissingOrdersFromSupabase();syncMissingMovementsFromSupabase();scheduleSupabaseSync()}else{formErr='Senha incorreta.';render()}});
  document.getElementById('logout')?.addEventListener('click',()=>{adminAuth=false;location.hash=ADMIN_ROUTE_HASH;render()});
  document.querySelectorAll('[data-tab]').forEach(e=>e.onclick=()=>{const t=e.dataset.tab;if(t==='cadastro'||t==='relatorios'||t==='caixa'){window.navOpen=window.navOpen||{};window.navOpen[t]=!window.navOpen[t];render();return}tab=t;window.adminOpsOpen=false;render()});
  document.querySelectorAll('#mobileAdminNav [data-tab]').forEach(e=>e.onclick=()=>{const t=e.dataset.tab;if(t==='cadastro'||t==='relatorios'||t==='caixa'){window.navOpen=window.navOpen||{};window.navOpen[t]=!window.navOpen[t];render();return}tab=t;mobileAdminNavOpen=false;render()});
