@@ -747,6 +747,33 @@ async function syncCouponsToSupabase(){
   console.error('Não foi possível sincronizar os cupons com o Supabase:',e);
  }
 }
+async function syncCustomersToSupabase(){
+ if(__snapEquals('customers',db.customers))return;
+ try{
+  // Clientes podem ser criados tanto pelo painel quanto por pedidos vindos
+  // de qualquer aparelho — por isso aqui só ENVIA (upsert), nunca apaga
+  // registros no Supabase que não estejam neste aparelho específico.
+  const rows=db.customers.map(c=>({id:c.id,code:c.code||null,code_num:c.codeNum||null,name:c.name,phone:c.phone||'',credit:Number(c.credit)||0,default_address_id:c.defaultAddressId||null}));
+  try{
+   const up=await sb.from('customers').upsert(rows);
+   if(up.error)throw up.error;
+  }catch(e){
+   // Colunas extras (code, code_num, credit, default_address_id) podem
+   // não existir ainda — tenta de novo só com nome e telefone.
+   const up2=await sb.from('customers').upsert(db.customers.map(c=>({id:c.id,name:c.name,phone:c.phone||''})));
+   if(up2.error)throw up2.error;
+  }
+  const addrRows=[];
+  db.customers.forEach(c=>(c.addresses||[]).forEach(a=>addrRows.push({id:a.id,customer_id:c.id,label:a.label||'',street:a.street||'',number:a.number||'',complement:a.complement||'',reference:a.reference||'',neighborhood_id:a.neighborhood||null,neighborhood_name:a.neighborhoodName||'',neighborhood_fee:a.neighborhoodFee||0})));
+  if(addrRows.length){
+   const upA=await sb.from('customer_addresses').upsert(addrRows);
+   if(upA.error)console.error('Não foi possível sincronizar os endereços dos clientes com o Supabase:',upA.error);
+  }
+  __snapCommit('customers',db.customers);
+ }catch(e){
+  console.error('Não foi possível sincronizar os clientes com o Supabase:',e);
+ }
+}
 async function syncProductRecipesToSupabase(){
  const rows=[];
  db.products.forEach(p=>{(p.recipe||[]).forEach(r=>{
@@ -819,6 +846,7 @@ async function syncAllToSupabase(){
  await syncTablesToSupabase();
  await syncSettingsToSupabase();
  await syncCouponsToSupabase();
+ await syncCustomersToSupabase();
  for(const o of (db.orders||[])){
   if(!__snapEquals('order:'+o.id,o)){
    await saveOrderToSupabase(o);
@@ -3142,8 +3170,31 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  document.getElementById('checkoutLogout')?.addEventListener('click',(e)=>{e.preventDefault();clearClientSession();window.checkoutDraft.name='';window.checkoutDraft.phone='';window.checkoutDraft.selectedAddressId='novo';render()});
  document.getElementById('openClientLogin')?.addEventListener('click',()=>{overlay='clientLogin';formErr='';render()});
  document.getElementById('clientLogout')?.addEventListener('click',()=>{clearClientSession();render()});
- document.getElementById('doClientLogin')?.addEventListener('click',()=>{const ph=document.getElementById('loginPhone')?.value||'';if(!validPhone(ph)){formErr='WhatsApp inválido. Use DDD + 9 dígitos.';render();return}const full=fmtPhone(ph),c=db.customers.find(x=>x.phone===full);if(!c){formErr='Nenhum cadastro encontrado com este WhatsApp.';render();return}setClientSession(c.id);overlay=null;formErr='';render()});
- document.getElementById('doLogin')?.addEventListener('click',()=>{if(document.getElementById('adminPass').value===ADMIN_PASSWORD){adminAuth=true;formErr='';render();syncMissingOrdersFromSupabase()}else{formErr='Senha incorreta.';render()}});
+ document.getElementById('doClientLogin')?.addEventListener('click',async()=>{
+  const ph=document.getElementById('loginPhone')?.value||'';
+  if(!validPhone(ph)){formErr='WhatsApp inválido. Use DDD + 9 dígitos.';render();return}
+  const full=fmtPhone(ph);
+  let c=db.customers.find(x=>x.phone===full);
+  if(!c){
+   // Pode ser um cliente cadastrado em outro aparelho (pelo painel do
+   // administrador, por exemplo) que ainda não chegou até este — confere
+   // direto no Supabase antes de dizer que não achou.
+   try{
+    const r=await sb.from('customers').select('*').eq('phone',full).maybeSingle();
+    if(!r.error&&r.data){
+     const addrR=await sb.from('customer_addresses').select('*').eq('customer_id',r.data.id);
+     const addresses=(addrR.data||[]).map(a=>({id:a.id,label:a.label||'',street:a.street||'',number:a.number||'',complement:a.complement||'',reference:a.reference||'',neighborhood:a.neighborhood_id||'',neighborhoodName:a.neighborhood_name||'',neighborhoodFee:Number(a.neighborhood_fee)||0}));
+     c={id:r.data.id,code:r.data.code||'',codeNum:r.data.code_num||0,name:r.data.name,phone:r.data.phone,credit:Number(r.data.credit)||0,addresses,defaultAddressId:r.data.default_address_id||(addresses[0]?.id||'')};
+     db.customers.push(c);
+     __snapCommit('customers',db.customers);
+     localStorage.setItem(KEY,JSON.stringify(db));
+    }
+   }catch(e){}
+  }
+  if(!c){formErr='Nenhum cadastro encontrado com este WhatsApp.';render();return}
+  setClientSession(c.id);overlay=null;formErr='';render();
+ });
+ document.getElementById('doLogin')?.addEventListener('click',()=>{if(document.getElementById('adminPass').value===ADMIN_PASSWORD){adminAuth=true;formErr='';render();syncMissingOrdersFromSupabase();scheduleSupabaseSync()}else{formErr='Senha incorreta.';render()}});
  document.getElementById('logout')?.addEventListener('click',()=>{adminAuth=false;location.hash=ADMIN_ROUTE_HASH;render()});
  document.querySelectorAll('[data-tab]').forEach(e=>e.onclick=()=>{const t=e.dataset.tab;if(t==='cadastro'||t==='relatorios'||t==='caixa'){window.navOpen=window.navOpen||{};window.navOpen[t]=!window.navOpen[t];render();return}tab=t;window.adminOpsOpen=false;render()});
  document.querySelectorAll('#mobileAdminNav [data-tab]').forEach(e=>e.onclick=()=>{const t=e.dataset.tab;if(t==='cadastro'||t==='relatorios'||t==='caixa'){window.navOpen=window.navOpen||{};window.navOpen[t]=!window.navOpen[t];render();return}tab=t;mobileAdminNavOpen=false;render()});
