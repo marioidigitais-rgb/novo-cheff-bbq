@@ -1288,7 +1288,88 @@ function checkNewOrders(){
 }
 setInterval(checkNewOrders,4000);
 window.addEventListener('storage',e=>{if(e.key===KEY)checkNewOrders()});
-function save(){localStorage.setItem(KEY,JSON.stringify(db));window.lastSeenOrderCount=db.orders.length;scheduleSupabaseSync()}
+function estimateStorageSize(){
+ try{return (localStorage.getItem(KEY)||'').length}catch(e){return 0}
+}
+function compressDataUrl(dataUrl,maxDim=900,quality=0.7){
+ return new Promise((resolve)=>{
+  if(!dataUrl||!String(dataUrl).startsWith('data:')){resolve(dataUrl);return}
+  const img=new Image();
+  img.onload=()=>{
+   let w=img.width,h=img.height;
+   if(w>maxDim||h>maxDim){
+    if(w>h){h=Math.round(h*maxDim/w);w=maxDim}else{w=Math.round(w*maxDim/h);h=maxDim}
+   }
+   const canvas=document.createElement('canvas');
+   canvas.width=w;canvas.height=h;
+   const ctx=canvas.getContext('2d');
+   ctx.drawImage(img,0,0,w,h);
+   try{resolve(canvas.toDataURL('image/jpeg',quality))}catch(e){resolve(dataUrl)}
+  };
+  img.onerror=()=>resolve(dataUrl);
+  img.src=dataUrl;
+ });
+}
+async function compressAllExistingPhotos(){
+ let compressedCount=0,beforeSize=0,afterSize=0;
+ for(const p of db.products){
+  if(p.photos&&p.photos.length){
+   for(let i=0;i<p.photos.length;i++){
+    const before=String(p.photos[i]||'');beforeSize+=before.length;
+    const after=await compressDataUrl(before);afterSize+=after.length;
+    if(after!==before){p.photos[i]=after;compressedCount++}
+   }
+   p.photo=p.photos[0]||null;
+  }
+ }
+ for(const a of db.addons){
+  if(a.photo){
+   const before=String(a.photo);beforeSize+=before.length;
+   const after=await compressDataUrl(before);afterSize+=after.length;
+   if(after!==before){a.photo=after;compressedCount++}
+  }
+ }
+ return {compressedCount,beforeSize,afterSize};
+}
+function compressImageFile(file,maxDim=900,quality=0.75){
+ return new Promise((resolve,reject)=>{
+  const reader=new FileReader();
+  reader.onload=()=>{
+   const img=new Image();
+   img.onload=()=>{
+    let w=img.width,h=img.height;
+    if(w>maxDim||h>maxDim){
+     if(w>h){h=Math.round(h*maxDim/w);w=maxDim}else{w=Math.round(w*maxDim/h);h=maxDim}
+    }
+    const canvas=document.createElement('canvas');
+    canvas.width=w;canvas.height=h;
+    const ctx=canvas.getContext('2d');
+    ctx.drawImage(img,0,0,w,h);
+    try{resolve(canvas.toDataURL('image/jpeg',quality))}catch(e){resolve(reader.result)}
+   };
+   img.onerror=()=>resolve(reader.result);
+   img.src=reader.result;
+  };
+  reader.onerror=reject;
+  reader.readAsDataURL(file);
+ });
+}
+function save(){
+ try{
+  localStorage.setItem(KEY,JSON.stringify(db));
+ }catch(e){
+  if(e&&(e.name==='QuotaExceededError'||e.code===22)){
+   window.__storageFull=true;
+   alert('O armazenamento deste navegador está cheio, então essa alteração não foi salva. Vá em Configurações › "Espaço de armazenamento" para liberar espaço (normalmente comprimindo fotos antigas resolve).');
+  }else{
+   console.error('Falha ao salvar localmente:',e);
+  }
+  return;
+ }
+ window.__storageFull=false;
+ window.lastSeenOrderCount=db.orders.length;
+ scheduleSupabaseSync();
+}
 async function load(){try{db=JSON.parse(localStorage.getItem(KEY))||structuredClone(DEFAULT)}catch(e){db=structuredClone(DEFAULT)}normalize();window.lastSeenOrderCount=db.orders.length;window.menuLoading=(route==='client');render();await loadMenuFromSupabase();normalize();if(window.supabaseMenuLoaded)__seedSyncSnapshot();window.menuLoading=false;render();startSupabaseRealtime()}
 function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.cancelamento??=DEFAULT.settings.messages.cancelamento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.settings.loyalty??={active:false,every:10,creditValue:20};db.categories??=structuredClone(DEFAULT.categories);db.categories.forEach(c=>{c.active=c.active!==false;c.upsell=!!c.upsell});db.products??=[];db.packageTypes??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.riders.forEach(r=>{r.active=r.active!==false;r.createdAt=r.createdAt||new Date().toISOString()});db.orders??=[];db.ingredients??=[];db.cash??={open:false,initial:0,movements:[]};db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.photos=(p.photos&&p.photos.length)?p.photos:(p.photo?[p.photo]:[]);p.photo=p.photos[0]||null;p.type=p.type==='pi'?'pi':'pa';p.packageType=p.packageType||'';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{id:r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{id:r&&r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true});db.ingredients.forEach(m=>{if(!isUuidLike(m.id)){const oldId=m.id,newId=uuidLike();m.id=newId;db.products.forEach(p=>{(p.recipe||[]).forEach(r=>{if(r.kind!=='pi'&&r.ingredientId===oldId)r.ingredientId=newId})})}});db.packageTypes.forEach(t=>{if(!isUuidLike(t.id)){const oldId=t.id,newId=uuidLike();t.id=newId;db.products.forEach(p=>{if(p.packageType===oldId)p.packageType=newId})}});db.payments.forEach(p=>{p.showClient??=true;p.fee=Number(p.fee)||0;p.feeFixed=Number(p.feeFixed)||0});db.coupons??=[];db.coupons.forEach(c=>{c.code=String(c.code||'').toUpperCase();c.type=c.type==='fixed'?'fixed':'percent';c.value=Number(c.value)||0;c.active??=true;c.usedCount=Number(c.usedCount)||0;c.maxUses=c.maxUses?Number(c.maxUses):null});db.hourExceptions??=[];
  db.customerSeq??=0;
@@ -3275,6 +3356,11 @@ function renderSettings(){
  <details><summary>Mesas</summary><div class="settings-content"><input autocomplete="off" id="tableName" placeholder="Mesa 06"><button class="primary" id="addTable">Adicionar mesa</button>${db.tables.map(t=>`<div class="itemrow">${esc(t)} <button class="btn" data-deltable="${esc(t)}">Excluir</button></div>`).join('')}</div></details>
  <details><summary>Textos de notificação ao cliente</summary><div class="settings-content"><p class="meta">Use {cliente}, {id} e {entregador} para inserir dados automaticamente.</p><div class="field"><label>Saudação (novo pedido)</label><textarea id="msgSaudacao" rows="2">${esc(db.settings.messages.saudacao)}</textarea><div class="meta">Enviada quando você clicar em "Enviar dados do pedido ao cliente" logo após o pedido ser feito (PDV ou site). Os dados do pedido (loja, itens, total etc.) são incluídos automaticamente depois deste texto.</div></div><div class="field"><label>Retirada no balcão</label><textarea id="msgRetirada" rows="2">${esc(db.settings.messages.retirada)}</textarea></div><div class="field"><label>Saiu para entrega</label><textarea id="msgEntrega" rows="2">${esc(db.settings.messages.entrega)}</textarea></div><div class="field"><label>Chamada para mesa</label><textarea id="msgMesa" rows="2">${esc(db.settings.messages.mesa)}</textarea></div><div class="field"><label>Encerramento do pedido (agradecimento)</label><textarea id="msgEncerramento" rows="2">${esc(db.settings.messages.encerramento)}</textarea><div class="meta">Enviada quando o pedido é marcado como concluído.</div></div><div class="field"><label>Cancelamento do pedido</label><textarea id="msgCancelamento" rows="2">${esc(db.settings.messages.cancelamento)}</textarea><div class="meta">Enviada quando você cancela o pedido pelo administrador.</div></div><div class="field"><label>Estabelecimento fechado</label><textarea id="msgFechado" rows="2">${esc(db.settings.messages.fechado)}</textarea><div class="meta">Exibida no cardápio e ao tentar finalizar o pedido quando a loja está fechada.</div></div><button class="primary" id="saveMessages">Salvar textos</button></div></details>
  <details><summary>Configurações de impressão</summary><div class="settings-content"><div class="grid2"><div class="field"><label>Fonte</label><select id="printFont"><option value="12px monospace" ${db.settings.print.font==='12px monospace'?'selected':''}>Monospace 12</option><option value="14px monospace" ${db.settings.print.font==='14px monospace'?'selected':''}>Monospace 14</option><option value="16px monospace" ${db.settings.print.font==='16px monospace'?'selected':''}>Monospace 16</option><option value="18px monospace" ${db.settings.print.font==='18px monospace'?'selected':''}>Monospace 18</option><option value="20px monospace" ${db.settings.print.font==='20px monospace'?'selected':''}>Monospace 20</option><option value="24px monospace" ${db.settings.print.font==='24px monospace'?'selected':''}>Monospace 24</option><option value="14px Arial" ${db.settings.print.font==='14px Arial'?'selected':''}>Arial 14</option><option value="16px Arial" ${db.settings.print.font==='16px Arial'?'selected':''}>Arial 16</option><option value="18px Arial" ${db.settings.print.font==='18px Arial'?'selected':''}>Arial 18</option><option value="20px Arial" ${db.settings.print.font==='20px Arial'?'selected':''}>Arial 20</option><option value="14px 'Courier New'" ${db.settings.print.font==="14px 'Courier New'"?'selected':''}>Courier New 14</option><option value="16px 'Courier New'" ${db.settings.print.font==="16px 'Courier New'"?'selected':''}>Courier New 16</option><option value="18px 'Courier New'" ${db.settings.print.font==="18px 'Courier New'"?'selected':''}>Courier New 18</option></select><div class="meta">Se o texto sair pequeno mesmo com fonte maior, verifique também a escala de impressão (100%) nas configurações da impressora térmica.</div></div><div class="field"><label>Tipo de papel</label><select id="printPaper"><option value="58mm" ${db.settings.print.paper==='58mm'?'selected':''}>58 mm</option><option value="80mm" ${db.settings.print.paper==='80mm'?'selected':''}>80 mm</option></select></div></div><div class="field"><label>Prazo estimado padrão</label><input autocomplete="off" id="printEstimatedTime" value="${esc(db.settings.print.estimatedTime||'')}" placeholder="Ex.: 30 a 45 minutos"></div><div class="field"><label>Organização dos dados</label><div class="chips">${[['produto','Produtos'],['adicionais','Adicionais'],['cliente','Cliente'],['endereco','Endereço'],['pagamento','Pagamento'],['total','Total']].map(([v,n])=>`<label class="chip"><input type="checkbox" data-printpart="${v}" ${db.settings.print.order.split(',').includes(v)?'checked':''}> ${n}</label>`).join('')}</div></div><button class="primary" id="savePrintSettings">Salvar configurações de impressão</button></div></details>
+ <details ${window.__storageFull?'open':''}><summary>Espaço de armazenamento${window.__storageFull?' ⚠️':''}</summary><div class="settings-content">
+  ${window.__storageFull?`<div class="err" style="margin-bottom:10px">⚠️ O armazenamento deste navegador está cheio — as últimas alterações podem não ter sido salvas. Comprima as fotos abaixo pra liberar espaço.</div>`:''}
+  <p class="meta" style="margin-bottom:10px">Uso atual estimado: <b>${(estimateStorageSize()/1024/1024).toFixed(2)} MB</b> (o navegador costuma permitir entre 5 e 10 MB). A causa mais comum de ficar cheio são fotos de produtos enviadas sem compressão — envios novos já são comprimidos automaticamente, mas fotos antigas continuam no tamanho original até você comprimir.</p>
+  <button type="button" class="primary" id="compressAllPhotos" style="width:100%">🗜️ Comprimir todas as fotos já salvas</button>
+ </div></details>
  <details><summary>Backup e segurança</summary><div class="settings-content"><p class="meta">Baixa um arquivo com uma cópia de tudo que está cadastrado (produtos, categorias, clientes, matérias-primas, cupons, pedidos etc.), pra guardar como segurança. Não substitui a sincronização com o Supabase — é só uma cópia extra, pra você guardar onde quiser.</p><button type="button" class="primary" id="downloadBackup">💾 Baixar backup completo</button></div></details>
  <details><summary>Programa de fidelidade</summary><div class="settings-content">
   <p class="meta" style="margin-bottom:10px">Dá um crédito automático (usando o mesmo sistema de crédito por troco que já existe) pro cliente que completar um número de pedidos concluídos — um incentivo pra ele voltar mais vezes.</p>
@@ -3528,22 +3614,17 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  document.getElementById('cancelPdv')?.addEventListener('click',()=>{if(pdvDraft().items.length&&!confirm('Cancelar o pedido atual? Os itens adicionados serão perdidos.'))return;window.pdvDraftData={customerId:'',customerSearch:'',mode:'retirada',table:'',address:'',number:'',complement:'',neighborhood:'',items:[],surcharge:0,discount:0,tendered:'',notes:'',pixLink:false,payments:[{payment:'',amount:0}]};formErr='';render()});
 
  document.querySelectorAll('[data-status]').forEach(e=>e.onclick=async()=>{let [oid,st]=e.dataset.status.split('|'),o=db.orders.find(x=>x.id===oid);if(o){o.status=st;if(st==='concluido')checkLoyaltyReward(o);await save();render();if(validPhone(o.customer.phone)){let u=notifyCustomer(o,st);if(confirm('Status alterado. Abrir WhatsApp do cliente para enviar a atualização?'))window.open(u,'_blank')}}});
- document.getElementById('npPhoto')?.addEventListener('change',(e)=>{
+ document.getElementById('npPhoto')?.addEventListener('change',async(e)=>{
   const files=[...e.target.files];if(!files.length)return;
   window.npPhotoDataList=window.npPhotoDataList||[];
-  let pending=files.length;
-  files.forEach(file=>{
-   const reader=new FileReader();
-   reader.onload=()=>{
-    window.npPhotoDataList.push(reader.result);
-    pending--;
-    if(pending===0){
-     const prev=document.getElementById('npPhotoPreview');
-     if(prev)prev.innerHTML=window.npPhotoDataList.map(ph=>`<img src="${ph}" style="width:60px;height:60px;object-fit:cover;border-radius:8px">`).join('');
-    }
-   };
-   reader.readAsDataURL(file);
-  });
+  for(const file of files){
+   try{
+    const compressed=await compressImageFile(file);
+    window.npPhotoDataList.push(compressed);
+   }catch(err){}
+  }
+  const prev=document.getElementById('npPhotoPreview');
+  if(prev)prev.innerHTML=window.npPhotoDataList.map(ph=>`<img src="${ph}" style="width:60px;height:60px;object-fit:cover;border-radius:8px">`).join('');
  });
  document.getElementById('npType')?.addEventListener('change',e=>{window.npTypeSelected=e.target.value;render()});
  document.getElementById('openNewProduct')?.addEventListener('click',()=>{window.npPhotoDataList=null;window.npTypeSelected=null;formErr='';overlay='newProduct';render()});
@@ -3565,22 +3646,17 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
   window.npPhotoDataList=null;formErr='';overlay=null;save();render()
  });
  document.querySelectorAll('[data-editprod]').forEach(e=>e.onclick=()=>{window.editingProduct=e.dataset.editprod;window.epPhotoDataList=null;window.epTypeSelected=null;const p=db.products.find(x=>x.id===e.dataset.editprod);window.epSnapshot=p?JSON.parse(JSON.stringify(p)):null;window.epIsNewDup=false;formErr='';overlay='editProduct';render()});
- document.getElementById('epPhoto')?.addEventListener('change',(e)=>{
+ document.getElementById('epPhoto')?.addEventListener('change',async(e)=>{
   const files=[...e.target.files];if(!files.length)return;
   window.epPhotoDataList=window.epPhotoDataList||[];
-  let pending=files.length;
-  files.forEach(file=>{
-   const reader=new FileReader();
-   reader.onload=()=>{
-    window.epPhotoDataList.push(reader.result);
-    pending--;
-    if(pending===0){
-     const prev=document.getElementById('epPhotoPreview');
-     if(prev)prev.innerHTML=window.epPhotoDataList.map(ph=>`<img src="${ph}" style="width:60px;height:60px;object-fit:cover;border-radius:8px">`).join('');
-    }
-   };
-   reader.readAsDataURL(file);
-  });
+  for(const file of files){
+   try{
+    const compressed=await compressImageFile(file);
+    window.epPhotoDataList.push(compressed);
+   }catch(err){}
+  }
+  const prev=document.getElementById('epPhotoPreview');
+  if(prev)prev.innerHTML=window.epPhotoDataList.map(ph=>`<img src="${ph}" style="width:60px;height:60px;object-fit:cover;border-radius:8px">`).join('');
  });
  document.querySelectorAll('[data-delphoto]').forEach(e=>e.onclick=()=>{
   let p=db.products.find(x=>x.id===window.editingProduct);if(!p)return;
@@ -3895,6 +3971,20 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  document.getElementById('applyCashReport')?.addEventListener('click',()=>{const t=new Date().toISOString().slice(0,10);window.cashReportFilter={from:cashRfFrom.value||t,to:cashRfTo.value||t};render()});
  document.querySelectorAll('[data-cashquick]').forEach(e=>e.onclick=()=>{const t=new Date(),todayStr=t.toISOString().slice(0,10);let from=todayStr;if(e.dataset.cashquick==='7d'){const d=new Date(t);d.setDate(d.getDate()-6);from=d.toISOString().slice(0,10)}else if(e.dataset.cashquick==='30d'){const d=new Date(t);d.setDate(d.getDate()-29);from=d.toISOString().slice(0,10)}window.cashReportFilter={from,to:todayStr};render()});
  document.getElementById('saveAdminWa')?.addEventListener('click',()=>{if(!validPhone(adminWa.value)){alert('Informe DDD + 9 dígitos. Ex.: 98912345678.');return}db.settings.adminWhatsApp=fmtPhone(adminWa.value);save();alert('WhatsApp do administrador salvo.');render()});document.getElementById('savePrintSettings')?.addEventListener('click',()=>{db.settings.print.font=printFont.value;db.settings.print.paper=printPaper.value;db.settings.print.estimatedTime=printEstimatedTime.value;db.settings.print.order=[...document.querySelectorAll('[data-printpart]:checked')].map(x=>x.dataset.printpart).join(',');save();alert('Configurações de impressão salvas.');render()});document.getElementById('saveMessages')?.addEventListener('click',()=>{db.settings.messages.saudacao=msgSaudacao.value;db.settings.messages.retirada=msgRetirada.value;db.settings.messages.entrega=msgEntrega.value;db.settings.messages.mesa=msgMesa.value;db.settings.messages.encerramento=msgEncerramento.value;db.settings.messages.cancelamento=msgCancelamento.value;db.settings.messages.fechado=msgFechado.value;save();alert('Textos de notificação salvos.');render()});
+ document.getElementById('compressAllPhotos')?.addEventListener('click',async()=>{
+  const btn=document.getElementById('compressAllPhotos');
+  if(btn){btn.disabled=true;btn.textContent='Comprimindo fotos, aguarde...'}
+  const result=await compressAllExistingPhotos();
+  try{
+   localStorage.setItem(KEY,JSON.stringify(db));
+   window.__storageFull=false;
+   alert(`Pronto! ${result.compressedCount} foto(s) comprimida(s) — de ${(result.beforeSize/1024/1024).toFixed(2)} MB para ${(result.afterSize/1024/1024).toFixed(2)} MB. Se estava travado, já deve estar liberado.`);
+   scheduleSupabaseSync();
+  }catch(e){
+   alert('As fotos foram comprimidas, mas ainda não coube no armazenamento. Pode ser necessário remover algumas fotos ou pedidos antigos manualmente, ou usar outro navegador/aparelho.');
+  }
+  render();
+ });
  document.getElementById('downloadBackup')?.addEventListener('click',()=>{
   try{
    const dataStr=JSON.stringify(db,null,2);
@@ -3921,7 +4011,7 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
 document.querySelectorAll('[data-clickaddon]').forEach(e=>e.onclick=()=>{let aid=e.dataset.clickaddon;let a=db.addons.find(x=>x.id===aid);if(!a)return;window.editingAddon=aid;window.addonDraft={name:a.name,price:a.price,stock:a.stock,min:a.min,max:a.max};window.addonPhotoData=null;overlay='addonDialog';render()});
 document.querySelectorAll('[data-toggleaddonstatus]').forEach(e=>e.onclick=()=>{let a=db.addons.find(x=>x.id===e.dataset.toggleaddonstatus);if(!a)return;a.active=!a.active;save();render()});
 document.querySelectorAll('[data-deladdonlist]').forEach(e=>e.onclick=()=>{let aid=e.dataset.deladdonlist;if(!confirm('Excluir este adicional? Produtos que o usam também serão afetados.'))return;db.addons=db.addons.filter(x=>x.id!==aid);db.products.forEach(p=>{p.addons=(p.addons||[]).filter(o=>o.id!==aid)});save();render()});
-document.getElementById('dialogAdPhoto')?.addEventListener('change',(e)=>{const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{window.addonPhotoData=reader.result;const prev=document.getElementById('dialogAdPhotoPreview');if(prev)prev.innerHTML=`<img src="${reader.result}" style="max-width:100px;border-radius:8px;display:block">`};reader.readAsDataURL(file)});
+document.getElementById('dialogAdPhoto')?.addEventListener('change',async(e)=>{const file=e.target.files[0];if(!file)return;try{const compressed=await compressImageFile(file);window.addonPhotoData=compressed;const prev=document.getElementById('dialogAdPhotoPreview');if(prev)prev.innerHTML=`<img src="${compressed}" style="max-width:100px;border-radius:8px;display:block">`}catch(err){}});
 document.getElementById('removeAddonPhoto')?.addEventListener('click',()=>{let a=db.addons.find(x=>x.id===window.editingAddon);if(a)a.photo=null;window.addonPhotoData=null;save();render()});
 document.getElementById('dialogAdPrice')?.addEventListener('input',moneyMaskOnInput);
 document.getElementById('saveAddonDialog')?.addEventListener('click',()=>{let n=document.getElementById('dialogAdName').value.trim(),price=moneyMaskParse(document.getElementById('dialogAdPrice').value),stock=Math.max(0,Number(document.getElementById('dialogAdStock').value||0)),min=Math.max(0,Number(document.getElementById('dialogAdMin').value||0)),max=Math.max(min,Number(document.getElementById('dialogAdMax').value||1));if(!n||price<0){alert('Informe nome e preço válidos.');return}if(window.editingAddon){let a=db.addons.find(x=>x.id===window.editingAddon);if(!a)return;a.name=n;a.price=price;a.stock=stock;a.min=min;a.max=max;if(window.addonPhotoData)a.photo=window.addonPhotoData;window.editingAddon=null}else{db.addons.push({id:id('a'),name:n,price,stock,active:true,min,max,photo:window.addonPhotoData||null})}window.addonDraft={};window.addonPhotoData=null;overlay=null;save();render()});
