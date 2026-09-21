@@ -2033,6 +2033,9 @@ function renderOrderDetail(){
  const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return '';
  return `<div class="overlay show"><div class="panel">
  <div class="head"><h2>${o.id} · ${orderTypeLabel(o)}</h2><button class="x" id="closeOverlay">×</button></div>
+ <div class="field pdv-search-wrap" style="position:relative;margin-top:8px"><label>Buscar cliente já cadastrado</label><input id="odCustomerSearch" placeholder="🔍 Nome ou WhatsApp do cliente" autocomplete="off">
+ <div id="odCustomerResults" class="pdv-results" style="display:none"></div>
+ </div>
  <div class="formgrid" style="margin-top:8px"><div class="field"><label>Cliente</label><input autocomplete="off" id="odCustomerName" value="${esc(o.customer.name||'')}" placeholder="Nome do cliente"></div><div class="field"><label>WhatsApp</label><input autocomplete="off" id="odCustomerPhone" inputmode="numeric" maxlength="15" value="${esc(maskPhoneBR(o.customer.phone||''))}" placeholder="(00) 90000-0000"></div></div>
  <div class="meta">${o.customer.delivery==='local'?'Mesa: '+esc(o.customer.table||''):o.customer.delivery==='entrega'?'Endereço: '+esc(o.customer.address)+', '+esc(o.customer.number)+(o.customer.complement?' · '+esc(o.customer.complement):'')+' · '+esc(o.customer.neighborhoodName||''):'Retirada no balcão'}</div>
  <details class="pdv-more-options" style="margin-top:10px"><summary>Alterar forma de entrega</summary><div class="settings-content">
@@ -2061,6 +2064,15 @@ function renderOrderDetail(){
  </div>
  <button class="ghost" id="closeOrderDetail">Fechar</button>
  </div></div>`;
+}
+function odCustomerResultsHtml(query){
+ const hasQuery=!!(query||'').trim();
+ if(!hasQuery)return `<div id="odCustomerResults" class="pdv-results" style="display:none"></div>`;
+ const filtered=db.customers.filter(c=>{let q=(query||'').toLowerCase().replace(/\D/g,'');let text=(c.name+' '+(c.phone||'')).toLowerCase();return text.includes((query||'').toLowerCase())||((c.phone||'').replace(/\D/g,'').includes(q)&&q)}).slice(0,8);
+ return `<div id="odCustomerResults" class="pdv-results" style="position:absolute;left:0;right:0;top:100%;z-index:10">${filtered.length?filtered.map(c=>`<button type="button" class="pdv-result" data-od-customer="${c.id}"><b>${esc(c.name)}</b><span>${c.phone?esc(fmtPhoneDisplay(c.phone)):'Sem WhatsApp'}</span></button>`).join(''):'<div class="meta" style="padding:8px">Nenhum cliente encontrado.</div>'}</div>`;
+}
+function bindOdCustomerResults(){
+ document.querySelectorAll('#odCustomerResults [data-od-customer]').forEach(b=>b.onclick=()=>{const c=db.customers.find(x=>x.id===b.dataset.odCustomer);const o=db.orders.find(x=>x.id===window.viewingOrder);if(!c||!o)return;o.customer.name=c.name;o.customer.phone=c.phone||'';const search=document.getElementById('odCustomerSearch');if(search)search.value='';save();render()});
 }
 function orderRemoveOneItem(orderId,pid){
  const o=db.orders.find(x=>x.id===orderId);if(!o)return;
@@ -3564,6 +3576,7 @@ function attach(){
  document.getElementById('odSurcharge')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;moneyMaskOnInput(e);o.surcharge=moneyMaskParse(e.target.value);recalcOrderTotal(o);save();const t=document.getElementById('odTotalDisplay');if(t)t.textContent=money(o.total)});
  document.getElementById('odDiscount')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;moneyMaskOnInput(e);o.discount=moneyMaskParse(e.target.value);recalcOrderTotal(o);save();const t=document.getElementById('odTotalDisplay');if(t)t.textContent=money(o.total)});
  document.getElementById('odNotes')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o){o.customer.notes=e.target.value;save()}});
+ document.getElementById('odCustomerSearch')?.addEventListener('input',e=>{const wrap=e.target.closest('.pdv-search-wrap'),old=document.getElementById('odCustomerResults');if(old&&wrap){old.outerHTML=odCustomerResultsHtml(e.target.value)}bindOdCustomerResults()});
  document.getElementById('odCustomerName')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o){o.customer.name=e.target.value;save()}});
  document.getElementById('odCustomerPhone')?.addEventListener('input',e=>{e.target.value=maskPhoneBR(e.target.value)});
  document.getElementById('odCustomerPhone')?.addEventListener('change',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;o.customer.phone=e.target.value.trim()?fmtPhone(e.target.value):'';save();render()});
