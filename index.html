@@ -2054,7 +2054,7 @@ function renderOrderDetail(){
  <div class="field pdv-search-wrap" style="position:relative;margin-top:8px"><label>Buscar cliente já cadastrado</label><input id="odCustomerSearch" placeholder="🔍 Nome ou WhatsApp do cliente" autocomplete="off">
  <div id="odCustomerResults" class="pdv-results" style="display:none"></div>
  </div>
- <div class="formgrid" style="margin-top:8px"><div class="field"><label>Cliente</label><input autocomplete="off" id="odCustomerName" value="${esc(o.customer.name||'')}" placeholder="Nome do cliente"></div><div class="field"><label>WhatsApp</label><input autocomplete="off" id="odCustomerPhone" inputmode="numeric" maxlength="15" value="${esc(maskPhoneBR(o.customer.phone||''))}" placeholder="(00) 90000-0000"></div></div>
+ <div class="formgrid" style="margin-top:8px"><div class="field"><label>Cliente</label><input autocomplete="off" id="odCustomerName" value="${esc(o.customer.name||'')}" placeholder="Nome do cliente"></div><div class="field"><label>WhatsApp</label><input autocomplete="off" id="odCustomerPhone" inputmode="numeric" maxlength="15" value="${esc(maskPhoneBR(phoneDigits(o.customer.phone||'')))}" placeholder="(00) 90000-0000"></div></div>
  <div class="meta" style="margin-top:8px">${o.customer.delivery==='local'?'Mesa: '+esc(o.customer.table||''):o.customer.delivery==='entrega'?'Endereço: '+esc(o.customer.address)+', '+esc(o.customer.number)+(o.customer.complement?' · '+esc(o.customer.complement):'')+' · '+esc(o.customer.neighborhoodName||''):'Retirada no balcão'}</div>
  <details class="pdv-more-options" style="margin-top:10px"><summary>Alterar forma de entrega</summary><div class="settings-content">
  <div class="field" style="margin-top:8px"><label>Forma de Entrega</label><select id="odDeliveryType">
@@ -2080,7 +2080,8 @@ function renderOrderDetail(){
  ${o.customer.delivery==='entrega'?`<button type="button" class="btn" data-dispatch="${o.id}">🛵 Definir entregador</button>`:''}
  ${validPhone(o.customer.phone)?`<a class="btn" style="text-decoration:none" target="_blank" href="${notifyCustomerStart(o)}">💬 Enviar resumo ao cliente</a>`:''}
  </div>
- ${orderDirty?`<div class="row" style="gap:8px;margin-top:12px"><button type="button" class="primary" id="saveOrderDetail" style="margin-top:0;width:auto;flex:1">💾 Salvar alterações</button><button type="button" class="ghost" id="cancelOrderDetail" style="margin-top:0;width:auto;flex:1">Cancelar alterações</button></div><div class="meta" style="margin-top:4px">Há alterações nesta comanda ainda não salvas.</div>`:`<button class="ghost" id="closeOrderDetail" style="margin-top:14px">Fechar</button>`}
+ <div class="row" style="gap:8px;margin-top:12px"><button type="button" class="primary" id="saveOrderDetail" style="margin-top:0;width:auto;flex:1">💾 Salvar alterações</button><button type="button" class="ghost" id="cancelOrderDetail" style="margin-top:0;width:auto;flex:1">${orderDirty?'Cancelar alterações':'Fechar'}</button></div>
+ ${orderDirty?`<div class="meta" style="margin-top:4px">Há alterações nesta comanda ainda não salvas.</div>`:''}
  </div></div>`;
 }
 function odCustomerResultsHtml(query){
@@ -3294,7 +3295,7 @@ function renderNewRiderDialog(){
  return `<div class="overlay show"><div class="panel" style="max-width:500px">
  <div class="head"><h2>${isEdit?'Editar entregador':'Cadastrar novo entregador'}</h2><button class="x" id="closeOverlay">×</button></div>
  <div class="field"><label>Nome completo</label><input autocomplete="off" id="rName" value="${esc(d.name||'')}" placeholder="Nome do entregador"></div>
- <div class="field"><label>Telefone</label><input autocomplete="off" id="rPhone" inputmode="numeric" maxlength="15" value="${esc(maskPhoneBR(d.phone||''))}" placeholder="(00) 99999-9999"></div>
+ <div class="field"><label>Telefone</label><input autocomplete="off" id="rPhone" inputmode="numeric" maxlength="15" value="${esc(maskPhoneBR(phoneDigits(d.phone||'')))}" placeholder="(00) 99999-9999"></div>
  <div class="field"><label>Placa da moto (opcional)</label><input autocomplete="off" id="rPlate" class="plate-input" value="${esc(d.plate||'')}" placeholder="AAA0000 ou AAA0A00" maxlength="8"><div class="plate-display" id="plateInfo" style="margin-top:4px;font-size:11px;color:var(--dim)"></div></div>
  <div class="field"><label>Valor da diária (R$, opcional)</label><input autocomplete="off" id="rRate" type="text" inputmode="decimal" value="${d.dailyRate?moneyMaskFormat(Number(d.dailyRate)):''}" placeholder="0,00"></div>
  <div class="field"><label>Status</label><div class="row" style="justify-content:flex-start;gap:10px"><button type="button" class="toggle-btn ${active?'active':''}" id="rActiveToggle"></button><span class="toggle-status ${active?'active':''}" id="rActiveLabel">${active?'Ativo':'Inativo'}</span></div></div>
@@ -3313,7 +3314,7 @@ function renderNewFuncionarioDialog(){
  <div class="head"><h2>${isEdit?'Editar funcionário':'Cadastrar novo funcionário'}</h2><button class="x" id="closeOverlay">×</button></div>
  <div class="field"><label>Nome completo</label><input autocomplete="off" id="fnName" value="${esc(d.name||'')}" placeholder="Nome do funcionário"></div>
  <div class="field"><label>Cargo (opcional)</label><input autocomplete="off" id="fnRole" value="${esc(d.role||'')}" placeholder="Ex.: Cozinheiro, Garçom, Caixa"></div>
- <div class="field"><label>Telefone (opcional)</label><input autocomplete="off" id="fnPhone" inputmode="numeric" maxlength="15" value="${esc(maskPhoneBR(d.phone||''))}" placeholder="(00) 99999-9999"></div>
+ <div class="field"><label>Telefone (opcional)</label><input autocomplete="off" id="fnPhone" inputmode="numeric" maxlength="15" value="${esc(maskPhoneBR(phoneDigits(d.phone||'')))}" placeholder="(00) 99999-9999"></div>
  <div class="field"><label>Valor da diária (R$)</label><input autocomplete="off" id="fnRate" type="text" inputmode="decimal" value="${d.dailyRate?moneyMaskFormat(Number(d.dailyRate)):''}" placeholder="0,00"></div>
  <div class="field"><label>Status</label><div class="row" style="justify-content:flex-start;gap:10px"><button type="button" class="toggle-btn ${active?'active':''}" id="fnActiveToggle"></button><span class="toggle-status ${active?'active':''}" id="fnActiveLabel">${active?'Ativo':'Inativo'}</span></div></div>
  ${formErr?'<div class="err">'+esc(formErr)+'</div>':''}
@@ -4107,7 +4108,6 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  document.getElementById('cancelRiderDialog')?.addEventListener('click',closeCurrentOverlay);
  document.getElementById('cancelFuncionarioDialog')?.addEventListener('click',closeCurrentOverlay);
  document.getElementById('cancelStaffPay')?.addEventListener('click',closeCurrentOverlay);
- document.getElementById('closeOrderDetail')?.addEventListener('click',closeCurrentOverlay);
  document.getElementById('closeMovDetail')?.addEventListener('click',closeCurrentOverlay);
  document.getElementById('closeCart')?.addEventListener('click',closeCurrentOverlay);
  document.getElementById('closePdvSaved')?.addEventListener('click',closeCurrentOverlay);
