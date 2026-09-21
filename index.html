@@ -2033,7 +2033,7 @@ function renderOrderDetail(){
  const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return '';
  return `<div class="overlay show"><div class="panel">
  <div class="head"><h2>${o.id} · ${orderTypeLabel(o)}</h2><button class="x" id="closeOverlay">×</button></div>
- <div class="meta">👤 ${esc(o.customer.name)}${o.customer.phone?' · '+esc(fmtPhoneDisplay(o.customer.phone)):''}</div>
+ <div class="formgrid" style="margin-top:8px"><div class="field"><label>Cliente</label><input autocomplete="off" id="odCustomerName" value="${esc(o.customer.name||'')}" placeholder="Nome do cliente"></div><div class="field"><label>WhatsApp</label><input autocomplete="off" id="odCustomerPhone" inputmode="numeric" maxlength="15" value="${esc(maskPhoneBR(o.customer.phone||''))}" placeholder="(00) 90000-0000"></div></div>
  <div class="meta">${o.customer.delivery==='local'?'Mesa: '+esc(o.customer.table||''):o.customer.delivery==='entrega'?'Endereço: '+esc(o.customer.address)+', '+esc(o.customer.number)+(o.customer.complement?' · '+esc(o.customer.complement):'')+' · '+esc(o.customer.neighborhoodName||''):'Retirada no balcão'}</div>
  <details class="pdv-more-options" style="margin-top:10px"><summary>Alterar forma de entrega</summary><div class="settings-content">
  <div class="field" style="margin-top:8px"><label>Forma de Entrega</label><select id="odDeliveryType">
@@ -2057,6 +2057,7 @@ function renderOrderDetail(){
  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  <div class="pdv-footer-actions" style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
  ${o.customer.delivery==='entrega'?`<button type="button" class="btn" data-dispatch="${o.id}">🛵 Definir entregador</button>`:''}
+ ${validPhone(o.customer.phone)?`<a class="btn" style="text-decoration:none" target="_blank" href="${notifyCustomerStart(o)}">💬 Enviar resumo ao cliente</a>`:''}
  </div>
  <button class="ghost" id="closeOrderDetail">Fechar</button>
  </div></div>`;
@@ -3563,6 +3564,9 @@ function attach(){
  document.getElementById('odSurcharge')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;moneyMaskOnInput(e);o.surcharge=moneyMaskParse(e.target.value);recalcOrderTotal(o);save();const t=document.getElementById('odTotalDisplay');if(t)t.textContent=money(o.total)});
  document.getElementById('odDiscount')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;moneyMaskOnInput(e);o.discount=moneyMaskParse(e.target.value);recalcOrderTotal(o);save();const t=document.getElementById('odTotalDisplay');if(t)t.textContent=money(o.total)});
  document.getElementById('odNotes')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o){o.customer.notes=e.target.value;save()}});
+ document.getElementById('odCustomerName')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o){o.customer.name=e.target.value;save()}});
+ document.getElementById('odCustomerPhone')?.addEventListener('input',e=>{e.target.value=maskPhoneBR(e.target.value)});
+ document.getElementById('odCustomerPhone')?.addEventListener('change',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;o.customer.phone=e.target.value.trim()?fmtPhone(e.target.value):'';save();render()});
  document.getElementById('odDeliveryType')?.addEventListener('change',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;o.customer.delivery=e.target.value;if(e.target.value!=='entrega'){o.customer.deliveryFee=0}else{o.customer.deliveryFee=orderDeliveryFeeFor('entrega',o.customer.neighborhood)}if(e.target.value!=='local')o.customer.table='';recalcOrderTotal(o);save();render()});
  document.getElementById('odNeighborhood')?.addEventListener('change',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;const nb=db.neighborhoods.find(n=>n.id===e.target.value);o.customer.neighborhood=e.target.value;o.customer.neighborhoodName=nb?.name||'';o.customer.deliveryFee=nb?.fee||0;recalcOrderTotal(o);save();render()});
  document.getElementById('odStreet')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o){o.customer.address=e.target.value;save()}});
