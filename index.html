@@ -1054,17 +1054,31 @@ function updateSyncStatusUI(){
  el.title=window.__syncStatus==='error'?'A última tentativa de sincronizar com o Supabase falhou. Os dados continuam salvos neste aparelho e serão reenviados na próxima alteração.':'Status da sincronização com o Supabase';
 }
 let __syncTimer=null;
+let __syncRunning=false;
+let __syncQueued=false;
 function scheduleSupabaseSync(){
  window.__syncStatus='pending';updateSyncStatusUI();
  clearTimeout(__syncTimer);
- __syncTimer=setTimeout(()=>{
-  window.__syncingNow=true;
-  window.__syncStatus='syncing';updateSyncStatusUI();
-  syncAllToSupabase()
-   .then(()=>{window.__syncStatus='ok';updateSyncStatusUI()})
-   .catch(e=>{window.__syncStatus='error';updateSyncStatusUI();console.error('Falha ao sincronizar com o Supabase (os dados continuam salvos neste aparelho e serão reenviados na próxima alteração):',e)})
-   .finally(()=>{clearTimeout(window.__syncingNowTimer);window.__syncingNowTimer=setTimeout(()=>{window.__syncingNow=false},2500)});
- },1200);
+ __syncTimer=setTimeout(runScheduledSync,1200);
+}
+function runScheduledSync(){
+ // Nunca deixa duas sincronizações rodarem ao mesmo tempo: se uma já está
+ // em andamento quando esta dispara, só marca "tem mais uma pendente" e
+ // roda em seguida, assim que a atual terminar. Rodar duas em paralelo é
+ // o que causava pedidos com itens duplicados no Supabase (cada uma
+ // apagava e reinseria os itens por conta própria, ao mesmo tempo).
+ if(__syncRunning){__syncQueued=true;return}
+ __syncRunning=true;
+ window.__syncingNow=true;
+ window.__syncStatus='syncing';updateSyncStatusUI();
+ syncAllToSupabase()
+  .then(()=>{window.__syncStatus='ok';updateSyncStatusUI()})
+  .catch(e=>{window.__syncStatus='error';updateSyncStatusUI();console.error('Falha ao sincronizar com o Supabase (os dados continuam salvos neste aparelho e serão reenviados na próxima alteração):',e)})
+  .finally(()=>{
+   __syncRunning=false;
+   clearTimeout(window.__syncingNowTimer);window.__syncingNowTimer=setTimeout(()=>{window.__syncingNow=false},2500);
+   if(__syncQueued){__syncQueued=false;runScheduledSync()}
+  });
 }
 // Escuta mudanças feitas por OUTROS aparelhos direto no Supabase (outro
 // celular no balcão, outra aba do painel) e atualiza a tela na hora,
@@ -2031,13 +2045,17 @@ function recalcOrderTotal(o){const base=o.items.reduce((s,x)=>s+x.price*x.qty+(x
 function orderDeliveryFeeFor(delivery,neighborhoodId){return delivery==='entrega'?(db.neighborhoods.find(n=>n.id===neighborhoodId)?.fee||0):0}
 function renderOrderDetail(){
  const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return '';
+ if(!window.odSnapshot||window.odSnapshot.orderId!==o.id){
+  window.odSnapshot={orderId:o.id,order:JSON.parse(JSON.stringify(o)),productStock:db.products.map(p=>({id:p.id,stock:p.stock})),addonStock:db.addons.map(a=>({id:a.id,stock:a.stock}))};
+ }
+ const orderDirty=JSON.stringify(o)!==JSON.stringify(window.odSnapshot.order);
  return `<div class="overlay show"><div class="panel">
  <div class="head"><h2>${o.id} · ${orderTypeLabel(o)}</h2><button class="x" id="closeOverlay">×</button></div>
  <div class="field pdv-search-wrap" style="position:relative;margin-top:8px"><label>Buscar cliente já cadastrado</label><input id="odCustomerSearch" placeholder="🔍 Nome ou WhatsApp do cliente" autocomplete="off">
  <div id="odCustomerResults" class="pdv-results" style="display:none"></div>
  </div>
  <div class="formgrid" style="margin-top:8px"><div class="field"><label>Cliente</label><input autocomplete="off" id="odCustomerName" value="${esc(o.customer.name||'')}" placeholder="Nome do cliente"></div><div class="field"><label>WhatsApp</label><input autocomplete="off" id="odCustomerPhone" inputmode="numeric" maxlength="15" value="${esc(maskPhoneBR(o.customer.phone||''))}" placeholder="(00) 90000-0000"></div></div>
- <div class="meta">${o.customer.delivery==='local'?'Mesa: '+esc(o.customer.table||''):o.customer.delivery==='entrega'?'Endereço: '+esc(o.customer.address)+', '+esc(o.customer.number)+(o.customer.complement?' · '+esc(o.customer.complement):'')+' · '+esc(o.customer.neighborhoodName||''):'Retirada no balcão'}</div>
+ <div class="meta" style="margin-top:8px">${o.customer.delivery==='local'?'Mesa: '+esc(o.customer.table||''):o.customer.delivery==='entrega'?'Endereço: '+esc(o.customer.address)+', '+esc(o.customer.number)+(o.customer.complement?' · '+esc(o.customer.complement):'')+' · '+esc(o.customer.neighborhoodName||''):'Retirada no balcão'}</div>
  <details class="pdv-more-options" style="margin-top:10px"><summary>Alterar forma de entrega</summary><div class="settings-content">
  <div class="field" style="margin-top:8px"><label>Forma de Entrega</label><select id="odDeliveryType">
  <option value="retirada" ${o.customer.delivery==='retirada'?'selected':''}>Retirada no balcão</option>
@@ -2062,7 +2080,7 @@ function renderOrderDetail(){
  ${o.customer.delivery==='entrega'?`<button type="button" class="btn" data-dispatch="${o.id}">🛵 Definir entregador</button>`:''}
  ${validPhone(o.customer.phone)?`<a class="btn" style="text-decoration:none" target="_blank" href="${notifyCustomerStart(o)}">💬 Enviar resumo ao cliente</a>`:''}
  </div>
- <button class="ghost" id="closeOrderDetail">Fechar</button>
+ ${orderDirty?`<div class="row" style="gap:8px;margin-top:12px"><button type="button" class="primary" id="saveOrderDetail" style="margin-top:0;width:auto;flex:1">💾 Salvar alterações</button><button type="button" class="ghost" id="cancelOrderDetail" style="margin-top:0;width:auto;flex:1">Cancelar alterações</button></div><div class="meta" style="margin-top:4px">Há alterações nesta comanda ainda não salvas.</div>`:`<button class="ghost" id="closeOrderDetail" style="margin-top:14px">Fechar</button>`}
  </div></div>`;
 }
 function odCustomerResultsHtml(query){
@@ -2072,7 +2090,7 @@ function odCustomerResultsHtml(query){
  return `<div id="odCustomerResults" class="pdv-results" style="position:absolute;left:0;right:0;top:100%;z-index:10">${filtered.length?filtered.map(c=>`<button type="button" class="pdv-result" data-od-customer="${c.id}"><b>${esc(c.name)}</b><span>${c.phone?esc(fmtPhoneDisplay(c.phone)):'Sem WhatsApp'}</span></button>`).join(''):'<div class="meta" style="padding:8px">Nenhum cliente encontrado.</div>'}</div>`;
 }
 function bindOdCustomerResults(){
- document.querySelectorAll('#odCustomerResults [data-od-customer]').forEach(b=>b.onclick=()=>{const c=db.customers.find(x=>x.id===b.dataset.odCustomer);const o=db.orders.find(x=>x.id===window.viewingOrder);if(!c||!o)return;o.customer.name=c.name;o.customer.phone=c.phone||'';const search=document.getElementById('odCustomerSearch');if(search)search.value='';save();render()});
+ document.querySelectorAll('#odCustomerResults [data-od-customer]').forEach(b=>b.onclick=()=>{const c=db.customers.find(x=>x.id===b.dataset.odCustomer);const o=db.orders.find(x=>x.id===window.viewingOrder);if(!c||!o)return;o.customer.name=c.name;o.customer.phone=c.phone||'';const search=document.getElementById('odCustomerSearch');if(search)search.value='';render()});
 }
 function orderRemoveOneItem(orderId,pid){
  const o=db.orders.find(x=>x.id===orderId);if(!o)return;
@@ -2090,7 +2108,6 @@ function orderRemoveOneItem(orderId,pid){
     items.splice(i,1);
    }
    recalcOrderTotal(o);
-   save();
    return;
   }
  }
@@ -3552,7 +3569,26 @@ function closeCurrentOverlay(){
   if(ctx.orderId){overlay='orderDetail';render();return}
   overlay=null;render();return;
  }
- overlay=null;window.riderDraft=null;window.editingRider=null;window.editingCategory=null;window.editingProduct=null;window.epSnapshot=null;window.epIsNewDup=false;window.epPhotoDataList=null;window.addingCtx=null;window.pdvProductsSnapshot=null;window.funcionarioDraft=null;window.editingFuncionario=null;window.staffPayDraft=null;formErr='';render()
+ if(overlay==='orderDetail'&&window.odSnapshot){
+  // Fechar a comanda com alterações ainda não confirmadas em "Salvar
+  // alterações" pede confirmação e, se a pessoa concordar, desfaz tudo
+  // (itens, estoque, cliente, entrega) de volta pro estado de quando a
+  // comanda foi aberta — em vez de deixar uma edição "pela metade".
+  const o=db.orders.find(x=>x.id===window.odSnapshot.orderId);
+  const dirty=o&&JSON.stringify(o)!==JSON.stringify(window.odSnapshot.order);
+  if(dirty){
+   if(!confirm('Existem alterações não salvas nesta comanda. Sair sem salvar (as alterações serão descartadas)?')){
+    return;
+   }
+   const idx=db.orders.findIndex(x=>x.id===window.odSnapshot.orderId);
+   if(idx>=0)db.orders[idx]=JSON.parse(JSON.stringify(window.odSnapshot.order));
+   window.odSnapshot.productStock.forEach(s=>{const p=db.products.find(x=>x.id===s.id);if(p)p.stock=s.stock});
+   window.odSnapshot.addonStock.forEach(s=>{const a=db.addons.find(x=>x.id===s.id);if(a)a.stock=s.stock});
+   save();
+  }
+  window.odSnapshot=null;
+ }
+ overlay=null;window.riderDraft=null;window.editingRider=null;window.editingCategory=null;window.editingProduct=null;window.epSnapshot=null;window.epIsNewDup=false;window.epPhotoDataList=null;window.addingCtx=null;window.pdvProductsSnapshot=null;window.funcionarioDraft=null;window.editingFuncionario=null;window.staffPayDraft=null;window.odSnapshot=null;formErr='';render()
 }
 function attach(){
  document.getElementById('menuToggle')?.addEventListener('click',()=>{window.adminOpsOpen=window.adminOpsOpen===false;mobileAdminNavOpen=!mobileAdminNavOpen;render()});
@@ -3561,31 +3597,53 @@ function attach(){
  document.getElementById('ordersSearch')?.addEventListener('input',e=>{window.pdvOrderFilter=window.pdvOrderFilter||{status:'ativos',search:''};window.pdvOrderFilter.search=e.target.value;const board=document.getElementById('ordersBoard');if(board){board.innerHTML=filteredOrders().map(o=>renderOrder(o)).join('')||'<div class="empty-state">Nenhum pedido encontrado.</div>';bindOrderCard(board)}});
  bindOrderCard(document);
 
- document.querySelectorAll('[data-orderitem-plus]').forEach(e=>e.onclick=()=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;const x=o.items[Number(e.dataset.orderitemPlus)],p=db.products.find(p=>p.id===x.productId);if(p&&getProductStock(p)>0){consumeProductStock(p,1,{orderId:o.id});x.qty++;recalcOrderTotal(o);save();render()}});
- document.querySelectorAll('[data-orderitem-minus]').forEach(e=>e.onclick=()=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;const idx=Number(e.dataset.orderitemMinus),x=o.items[idx],p=db.products.find(p=>p.id===x.productId);if(x.qty>1){x.qty--;if(p)restoreProductStock(p,1,{orderId:o.id})}else{if(p)restoreProductStock(p,x.qty,{orderId:o.id});(x.addons||[]).forEach(a=>{let ad=db.addons.find(q=>q.id===a.id);if(ad)ad.stock+=a.qty});o.items.splice(idx,1)}recalcOrderTotal(o);save();render()});
- document.querySelectorAll('[data-orderitem-remove]').forEach(e=>e.onclick=()=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;const idx=Number(e.dataset.orderitemRemove),x=o.items[idx],p=db.products.find(p=>p.id===x.productId);if(p)restoreProductStock(p,x.qty,{orderId:o.id});(x.addons||[]).forEach(a=>{let ad=db.addons.find(q=>q.id===a.id);if(ad)ad.stock+=a.qty*x.qty});o.items.splice(idx,1);recalcOrderTotal(o);save();render()});
+ document.querySelectorAll('[data-orderitem-plus]').forEach(e=>e.onclick=()=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;const x=o.items[Number(e.dataset.orderitemPlus)],p=db.products.find(p=>p.id===x.productId);if(p&&getProductStock(p)>0){consumeProductStock(p,1,{orderId:o.id});x.qty++;recalcOrderTotal(o);render()}});
+ document.querySelectorAll('[data-orderitem-minus]').forEach(e=>e.onclick=()=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;const idx=Number(e.dataset.orderitemMinus),x=o.items[idx],p=db.products.find(p=>p.id===x.productId);if(x.qty>1){x.qty--;if(p)restoreProductStock(p,1,{orderId:o.id})}else{if(p)restoreProductStock(p,x.qty,{orderId:o.id});(x.addons||[]).forEach(a=>{let ad=db.addons.find(q=>q.id===a.id);if(ad)ad.stock+=a.qty});o.items.splice(idx,1)}recalcOrderTotal(o);render()});
+ document.querySelectorAll('[data-orderitem-remove]').forEach(e=>e.onclick=()=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;const idx=Number(e.dataset.orderitemRemove),x=o.items[idx],p=db.products.find(p=>p.id===x.productId);if(p)restoreProductStock(p,x.qty,{orderId:o.id});(x.addons||[]).forEach(a=>{let ad=db.addons.find(q=>q.id===a.id);if(ad)ad.stock+=a.qty*x.qty});o.items.splice(idx,1);recalcOrderTotal(o);render()});
  document.querySelectorAll('[data-orderitem-note]').forEach(e=>e.oninput=()=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o)o.items[Number(e.dataset.orderitemNote)].notes=e.target.value});
  document.getElementById('openOrderAddItem')?.addEventListener('click',()=>{window.orderAddCat=window.orderAddCat||db.categories[0]?.id;formErr='';overlay='orderAddItem';render()});
  document.getElementById('closeOrderAddItem')?.addEventListener('click',()=>{overlay='orderDetail';formErr='';render()});
  document.getElementById('backToOrderDetail')?.addEventListener('click',()=>{overlay='orderDetail';formErr='';render()});
  document.querySelectorAll('[data-orderaddcat]').forEach(e=>e.onclick=()=>{window.orderAddCat=e.dataset.orderaddcat;render()});
- document.querySelectorAll('[data-orderadd-product]').forEach(e=>e.onclick=()=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;let p=db.products.find(x=>x.id===e.dataset.orderaddProduct);if(!p||!productAvailable(p))return;consumeProductStock(p,1,{orderId:o.id});if(productAllowsAddons(p)){o.items.push({productId:p.id,name:p.name,price:p.price,qty:1,addons:[],notes:''})}else{const ex=o.items.find(x=>x.productId===p.id&&!(x.addons&&x.addons.length)&&!x.notes);if(ex)ex.qty++;else o.items.push({productId:p.id,name:p.name,price:p.price,qty:1,addons:[],notes:''})}recalcOrderTotal(o);save();render()});
+ document.querySelectorAll('[data-orderadd-product]').forEach(e=>e.onclick=()=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;let p=db.products.find(x=>x.id===e.dataset.orderaddProduct);if(!p||!productAvailable(p))return;consumeProductStock(p,1,{orderId:o.id});if(productAllowsAddons(p)){o.items.push({productId:p.id,name:p.name,price:p.price,qty:1,addons:[],notes:''})}else{const ex=o.items.find(x=>x.productId===p.id&&!(x.addons&&x.addons.length)&&!x.notes);if(ex)ex.qty++;else o.items.push({productId:p.id,name:p.name,price:p.price,qty:1,addons:[],notes:''})}recalcOrderTotal(o);render()});
  document.querySelectorAll('[data-orderadd-prod-minus]').forEach(e=>e.onclick=(ev)=>{ev.stopPropagation();orderRemoveOneItem(window.viewingOrder,e.dataset.orderaddProdMinus);render()});
  document.querySelectorAll('[data-orderitem-addaddon]').forEach(e=>e.onclick=()=>{window.addingCtx={type:'addAddon',orderId:window.viewingOrder,itemIndex:Number(e.dataset.orderitemAddaddon)};formErr='';overlay='addons';render()});
- document.querySelectorAll('[data-orderitem-deladdon]').forEach(e=>e.onclick=()=>{const [ii,ai]=e.dataset.orderitemDeladdon.split('|').map(Number);const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;const it=o.items[ii];if(!it||!it.addons[ai])return;if(!confirm('Remover este adicional do item? (ação do administrador)'))return;const a=it.addons[ai];const ad=db.addons.find(x=>x.id===a.id);if(ad)ad.stock+=a.qty*it.qty;it.addons.splice(ai,1);recalcOrderTotal(o);save();render()});
- document.getElementById('odSurcharge')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;moneyMaskOnInput(e);o.surcharge=moneyMaskParse(e.target.value);recalcOrderTotal(o);save();const t=document.getElementById('odTotalDisplay');if(t)t.textContent=money(o.total)});
- document.getElementById('odDiscount')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;moneyMaskOnInput(e);o.discount=moneyMaskParse(e.target.value);recalcOrderTotal(o);save();const t=document.getElementById('odTotalDisplay');if(t)t.textContent=money(o.total)});
- document.getElementById('odNotes')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o){o.customer.notes=e.target.value;save()}});
+ document.querySelectorAll('[data-orderitem-deladdon]').forEach(e=>e.onclick=()=>{const [ii,ai]=e.dataset.orderitemDeladdon.split('|').map(Number);const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;const it=o.items[ii];if(!it||!it.addons[ai])return;if(!confirm('Remover este adicional do item? (ação do administrador)'))return;const a=it.addons[ai];const ad=db.addons.find(x=>x.id===a.id);if(ad)ad.stock+=a.qty*it.qty;it.addons.splice(ai,1);recalcOrderTotal(o);render()});
+ document.getElementById('odSurcharge')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;moneyMaskOnInput(e);o.surcharge=moneyMaskParse(e.target.value);recalcOrderTotal(o);const t=document.getElementById('odTotalDisplay');if(t)t.textContent=money(o.total)});
+ document.getElementById('odDiscount')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;moneyMaskOnInput(e);o.discount=moneyMaskParse(e.target.value);recalcOrderTotal(o);const t=document.getElementById('odTotalDisplay');if(t)t.textContent=money(o.total)});
+ document.getElementById('odSurcharge')?.addEventListener('change',()=>render());
+ document.getElementById('odDiscount')?.addEventListener('change',()=>render());
+ document.getElementById('odNotes')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o)o.customer.notes=e.target.value});
+ document.getElementById('odNotes')?.addEventListener('change',()=>render());
  document.getElementById('odCustomerSearch')?.addEventListener('input',e=>{const wrap=e.target.closest('.pdv-search-wrap'),old=document.getElementById('odCustomerResults');if(old&&wrap){old.outerHTML=odCustomerResultsHtml(e.target.value)}bindOdCustomerResults()});
- document.getElementById('odCustomerName')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o){o.customer.name=e.target.value;save()}});
+ document.getElementById('odCustomerName')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o)o.customer.name=e.target.value});
+ document.getElementById('odCustomerName')?.addEventListener('change',()=>render());
  document.getElementById('odCustomerPhone')?.addEventListener('input',e=>{e.target.value=maskPhoneBR(e.target.value)});
- document.getElementById('odCustomerPhone')?.addEventListener('change',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;o.customer.phone=e.target.value.trim()?fmtPhone(e.target.value):'';save();render()});
- document.getElementById('odDeliveryType')?.addEventListener('change',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;o.customer.delivery=e.target.value;if(e.target.value!=='entrega'){o.customer.deliveryFee=0}else{o.customer.deliveryFee=orderDeliveryFeeFor('entrega',o.customer.neighborhood)}if(e.target.value!=='local')o.customer.table='';recalcOrderTotal(o);save();render()});
- document.getElementById('odNeighborhood')?.addEventListener('change',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;const nb=db.neighborhoods.find(n=>n.id===e.target.value);o.customer.neighborhood=e.target.value;o.customer.neighborhoodName=nb?.name||'';o.customer.deliveryFee=nb?.fee||0;recalcOrderTotal(o);save();render()});
- document.getElementById('odStreet')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o){o.customer.address=e.target.value;save()}});
- document.getElementById('odNumber')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o){o.customer.number=e.target.value;save()}});
- document.getElementById('odComplement')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o){o.customer.complement=e.target.value;save()}});
- document.getElementById('odTable')?.addEventListener('change',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o){o.customer.table=e.target.value;save()}});
+ document.getElementById('odCustomerPhone')?.addEventListener('change',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;o.customer.phone=e.target.value.trim()?fmtPhone(e.target.value):'';render()});
+ document.getElementById('odDeliveryType')?.addEventListener('change',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;o.customer.delivery=e.target.value;if(e.target.value!=='entrega'){o.customer.deliveryFee=0}else{o.customer.deliveryFee=orderDeliveryFeeFor('entrega',o.customer.neighborhood)}if(e.target.value!=='local')o.customer.table='';recalcOrderTotal(o);render()});
+ document.getElementById('odNeighborhood')?.addEventListener('change',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;const nb=db.neighborhoods.find(n=>n.id===e.target.value);o.customer.neighborhood=e.target.value;o.customer.neighborhoodName=nb?.name||'';o.customer.deliveryFee=nb?.fee||0;recalcOrderTotal(o);render()});
+ document.getElementById('odStreet')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o)o.customer.address=e.target.value});
+ document.getElementById('odNumber')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o)o.customer.number=e.target.value});
+ document.getElementById('odComplement')?.addEventListener('input',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o)o.customer.complement=e.target.value});
+ document.getElementById('odStreet')?.addEventListener('change',()=>render());
+ document.getElementById('odNumber')?.addEventListener('change',()=>render());
+ document.getElementById('odComplement')?.addEventListener('change',()=>render());
+ document.getElementById('odTable')?.addEventListener('change',e=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(o)o.customer.table=e.target.value;render()});
+ document.getElementById('saveOrderDetail')?.addEventListener('click',()=>{
+  const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;
+  if(validPhone(o.customer.phone)){const cust=findOrCreateCustomerByPhone(o.customer.name,o.customer.phone);o.customer.name=cust.name}
+  window.odSnapshot=null;
+  formErr='';overlay=null;save();render();
+ });
+ document.getElementById('cancelOrderDetail')?.addEventListener('click',()=>{
+  const snap=window.odSnapshot;if(!snap)return;
+  const idx=db.orders.findIndex(x=>x.id===snap.orderId);
+  if(idx>=0)db.orders[idx]=JSON.parse(JSON.stringify(snap.order));
+  snap.productStock.forEach(s=>{const p=db.products.find(x=>x.id===s.id);if(p)p.stock=s.stock});
+  snap.addonStock.forEach(s=>{const a=db.addons.find(x=>x.id===s.id);if(a)a.stock=s.stock});
+  window.odSnapshot=null;
+  formErr='';overlay=null;save();render();
+ });
  document.getElementById('confirmDispatch')?.addEventListener('click',()=>{const o=db.orders.find(x=>x.id===window.dispatchOrderId);if(!o)return;const rid=document.getElementById('dispatchRider')?.value,sendWa=document.getElementById('dispatchSendWa')?.checked;if(!rid){formErr='Selecione o entregador.';render();return}const rider=db.riders.find(r=>r.id===rid);o.riderId=rid;o.status='saiu_entrega';formErr='';save();const waRider=sendWa?notifyRider(o,rider):'';overlay=null;render();if(waRider)window.open(waRider,'_blank')});
 
  document.getElementById('payPercent')?.addEventListener('input',e=>{const d=window.paymentDialogDraft;if(!d)return;d.percent=Number(e.target.value||0);render()});
@@ -3637,7 +3695,7 @@ function attach(){
   document.querySelectorAll('[id^=addonQty_]').forEach(el=>{let aid=el.id.replace('addonQty_',''),a=db.addons.find(x=>x.id===aid),q=Number(el.textContent||0),mx=productAddonMax(ctxP,aid);if(a&&q>0){if(q>mx||q>a.stock){formErr=`Verifique a quantidade do adicional ${a.name}.`;return}adds.push({...a,qty:q})}});
   if(formErr)return render();
   if(!adds.length){formErr='Selecione ao menos um adicional.';render();return}
-  if(ctx.orderId){const o=db.orders.find(x=>x.id===ctx.orderId),it=o?.items[ctx.itemIndex];if(!it){overlay='orderDetail';render();return}adds.forEach(a=>{const ad=db.addons.find(x=>x.id===a.id);if(ad)ad.stock-=a.qty*it.qty;const ex=it.addons.find(x=>x.id===a.id);if(ex)ex.qty+=a.qty;else it.addons.push(a)});recalcOrderTotal(o);save();window.addingCtx=null;formErr='';overlay='orderDetail';render();return}
+  if(ctx.orderId){const o=db.orders.find(x=>x.id===ctx.orderId),it=o?.items[ctx.itemIndex];if(!it){overlay='orderDetail';render();return}adds.forEach(a=>{const ad=db.addons.find(x=>x.id===a.id);if(ad)ad.stock-=a.qty*it.qty;const ex=it.addons.find(x=>x.id===a.id);if(ex)ex.qty+=a.qty;else it.addons.push(a)});recalcOrderTotal(o);window.addingCtx=null;formErr='';overlay='orderDetail';render();return}
   if(ctx.pdv){const it=pdvDraft().items[ctx.itemIndex];if(!it){overlay=null;render();return}adds.forEach(a=>{const ex=it.addons.find(x=>x.id===a.id);if(ex)ex.qty+=a.qty;else it.addons.push(a)});window.addingCtx=null;formErr='';overlay=null;render();return}
   if(ctx.cart){const it=cart[ctx.itemIndex];if(!it){overlay='cart';render();return}adds.forEach(a=>{const ex=it.addons.find(x=>x.id===a.id);if(ex)ex.qty+=a.qty;else it.addons.push(a)});window.addingCtx=null;formErr='';overlay='cart';render();return}
   overlay=null;render();
