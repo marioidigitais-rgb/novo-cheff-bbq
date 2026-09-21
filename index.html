@@ -310,7 +310,8 @@ const DEFAULT={
  tables:['Mesa 01','Mesa 02','Mesa 03','Mesa 04','Mesa 05'],riders:[],ingredients:[],orders:[],cash:{open:false,initial:0,movements:[]},suppliers:[],stockMovements:[]
 };
 const ADMIN_ROUTE_HASH='#gestao-x9k2m7';
-let db,route=location.hash===ADMIN_ROUTE_HASH?'admin':(location.hash.startsWith('#pedido-')?'tracking':'client'),tab='pedidos',cat=null,cart=[],overlay=null,formErr='',adminAuth=false,mobileAdminNavOpen=false;window.pdvDraftData=window.pdvDraftData||{customerId:'',customerSearch:'',mode:'retirada',table:'',address:'',number:'',complement:'',neighborhood:'',items:[],surcharge:0,discount:0,tendered:'',notes:''};
+const ADMIN_AUTH_KEY='brasa_admin_auth';
+let db,route=location.hash===ADMIN_ROUTE_HASH?'admin':(location.hash.startsWith('#pedido-')?'tracking':'client'),tab='pedidos',cat=null,cart=[],overlay=null,formErr='',adminAuth=route==='admin'&&localStorage.getItem(ADMIN_AUTH_KEY)==='1',mobileAdminNavOpen=false;window.pdvDraftData=window.pdvDraftData||{customerId:'',customerSearch:'',mode:'retirada',table:'',address:'',number:'',complement:'',neighborhood:'',items:[],surcharge:0,discount:0,tendered:'',notes:''};
 
 // --- Conexão com o Supabase (banco de dados do cardápio) ---
 const SUPABASE_URL='https://cfblmobdyldarlmryjrg.supabase.co';
@@ -3757,8 +3758,8 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
   if(!c){formErr='Nenhum cadastro encontrado com este WhatsApp.';render();return}
   setClientSession(c.id);overlay=null;formErr='';render();
  });
- document.getElementById('doLogin')?.addEventListener('click',()=>{if(document.getElementById('adminPass').value===ADMIN_PASSWORD){adminAuth=true;formErr='';render();syncMissingOrdersFromSupabase();syncMissingMovementsFromSupabase();scheduleSupabaseSync()}else{formErr='Senha incorreta.';render()}});
- document.getElementById('logout')?.addEventListener('click',()=>{adminAuth=false;location.hash=ADMIN_ROUTE_HASH;render()});
+ document.getElementById('doLogin')?.addEventListener('click',()=>{if(document.getElementById('adminPass').value===ADMIN_PASSWORD){adminAuth=true;localStorage.setItem(ADMIN_AUTH_KEY,'1');formErr='';render();syncMissingOrdersFromSupabase();syncMissingMovementsFromSupabase();scheduleSupabaseSync()}else{formErr='Senha incorreta.';render()}});
+ document.getElementById('logout')?.addEventListener('click',()=>{adminAuth=false;localStorage.removeItem(ADMIN_AUTH_KEY);location.hash=ADMIN_ROUTE_HASH;render()});
  document.querySelectorAll('[data-tab]').forEach(e=>e.onclick=()=>{const t=e.dataset.tab;if(t==='cadastro'||t==='relatorios'||t==='caixa'){window.navOpen=window.navOpen||{};const wasOpen=!!window.navOpen[t];window.navOpen={};if(!wasOpen)window.navOpen[t]=true;render();return}tab=t;window.adminOpsOpen=false;render()});
  document.querySelectorAll('#mobileAdminNav [data-tab]').forEach(e=>e.onclick=()=>{const t=e.dataset.tab;if(t==='cadastro'||t==='relatorios'||t==='caixa'){window.navOpen=window.navOpen||{};const wasOpen=!!window.navOpen[t];window.navOpen={};if(!wasOpen)window.navOpen[t]=true;render();return}tab=t;mobileAdminNavOpen=false;render()});
  document.querySelectorAll('#mobileAdminNav [data-report-view]').forEach(e=>e.onclick=()=>{tab='relatorios';window.reportView=e.dataset.reportView;mobileAdminNavOpen=false;render()});
