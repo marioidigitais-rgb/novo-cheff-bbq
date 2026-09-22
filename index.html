@@ -403,6 +403,15 @@ async function loadMenuFromSupabase(){
    }
   }catch(e){}
   try{
+   // Busca as seções de matéria-prima (ex.: Embalagens, Hortifruti) à parte:
+   // se a tabela "materia_sections" ainda não existir no Supabase, essa
+   // consulta falha sozinha sem derrubar o restante do carregamento.
+   const matSecR=await sb.from('materia_sections').select('id,name');
+   if(!matSecR.error&&matSecR.data&&matSecR.data.length){
+    db.materiaSections=matSecR.data.map(t=>({id:t.id,name:t.name}));
+   }
+  }catch(e){}
+  try{
    // Busca a classificação de cada produto à parte: se a coluna
    // "package_type" ainda não existir na tabela products do Supabase,
    // essa consulta falha sozinha sem derrubar o restante do carregamento.
@@ -444,6 +453,15 @@ async function loadMenuFromSupabase(){
    if(!ingExtraR.error&&ingExtraR.data){
     const map={};ingExtraR.data.forEach(x=>{map[x.id]=x.low_stock_threshold});
     db.ingredients.forEach(m=>{if(map[m.id]!==undefined)m.lowStockThreshold=map[m.id]||null});
+   }
+  }catch(e){}
+  try{
+   // Mesma coisa para a coluna "section" de cada matéria-prima — sem
+   // travar caso a coluna ainda não exista no Supabase.
+   const ingSecR=await sb.from('ingredients').select('id,section');
+   if(!ingSecR.error&&ingSecR.data){
+    const map={};ingSecR.data.forEach(x=>{map[x.id]=x.section});
+    db.ingredients.forEach(m=>{if(map[m.id]!==undefined)m.section=map[m.id]||''});
    }
   }catch(e){}
   try{
@@ -786,15 +804,33 @@ async function syncPackageTypesToSupabase(){
   console.error('Não foi possível sincronizar as classificações de produto com o Supabase:',e);
  }
 }
+async function syncMateriaSectionsToSupabase(){
+ if(__snapEquals('materiaSections',db.materiaSections||[]))return;
+ try{
+  const rows=(db.materiaSections||[]).map(t=>({id:t.id,name:t.name}));
+  await __upsertAndPrune('materia_sections',rows);
+  __snapCommit('materiaSections',db.materiaSections||[]);
+ }catch(e){
+  // A tabela "materia_sections" pode não existir ainda no Supabase — os
+  // dados continuam salvos neste aparelho e a sincronização é tentada
+  // novamente na próxima alteração, sem travar o restante.
+  console.error('Não foi possível sincronizar as seções de matéria-prima com o Supabase:',e);
+ }
+}
 async function syncIngredientsToSupabase(){
  if(__snapEquals('ingredients',db.ingredients))return;
  try{
-  const rows=db.ingredients.map(m=>({id:m.id,name:m.name,unit:m.unit,stock:m.stock,cost:m.cost,active:m.active!==false,low_stock_threshold:m.lowStockThreshold||null}));
+  const rows=db.ingredients.map(m=>({id:m.id,name:m.name,unit:m.unit,stock:m.stock,cost:m.cost,active:m.active!==false,low_stock_threshold:m.lowStockThreshold||null,section:m.section||null}));
   try{
    await __upsertAndPrune('ingredients',rows);
   }catch(e){
-   // A coluna "low_stock_threshold" pode não existir ainda — tenta de novo sem ela.
-   await __upsertAndPrune('ingredients',rows.map(({low_stock_threshold,...r})=>r));
+   // A coluna "low_stock_threshold" ou "section" pode não existir ainda —
+   // tenta de novo sem elas.
+   try{
+    await __upsertAndPrune('ingredients',rows.map(({low_stock_threshold,...r})=>r));
+   }catch(e2){
+    await __upsertAndPrune('ingredients',rows.map(({low_stock_threshold,section,...r})=>r));
+   }
   }
   __snapCommit('ingredients',db.ingredients);
  }catch(e){
@@ -1022,6 +1058,7 @@ async function syncMissingMovementsFromSupabase(){
 async function syncAllToSupabase(){
  await syncCategoriesToSupabase();
  await syncPackageTypesToSupabase();
+ await syncMateriaSectionsToSupabase();
  await syncIngredientsToSupabase();
  await syncAddonsToSupabase();
  await syncProductsToSupabase();
@@ -1114,6 +1151,7 @@ function startSupabaseRealtime(){
   sb.channel('cardapio-mudou-2')
    .on('postgres_changes',{event:'*',schema:'public',table:'ingredients'},__scheduleRealtimeReload)
    .on('postgres_changes',{event:'*',schema:'public',table:'package_types'},__scheduleRealtimeReload)
+   .on('postgres_changes',{event:'*',schema:'public',table:'materia_sections'},__scheduleRealtimeReload)
    .on('postgres_changes',{event:'*',schema:'public',table:'product_recipe_items'},__scheduleRealtimeReload)
    .on('postgres_changes',{event:'*',schema:'public',table:'coupons'},__scheduleRealtimeReload)
    .subscribe();
@@ -1407,7 +1445,7 @@ function save(){
  scheduleSupabaseSync();
 }
 async function load(){try{db=JSON.parse(localStorage.getItem(KEY))||structuredClone(DEFAULT)}catch(e){db=structuredClone(DEFAULT)}normalize();window.lastSeenOrderCount=db.orders.length;window.menuLoading=(route==='client');render();await loadMenuFromSupabase();normalize();if(window.supabaseMenuLoaded)__seedSyncSnapshot();window.menuLoading=false;render();startSupabaseRealtime()}
-function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.cancelamento??=DEFAULT.settings.messages.cancelamento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.settings.loyalty??={active:false,every:10,creditValue:20};db.categories??=structuredClone(DEFAULT.categories);db.categories.forEach(c=>{c.active=c.active!==false;c.upsell=!!c.upsell});db.products??=[];db.packageTypes??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.riders.forEach(r=>{r.active=r.active!==false;r.createdAt=r.createdAt||new Date().toISOString();r.dailyRate=Number(r.dailyRate)||0});db.employees??=[];db.employees.forEach(e=>{e.active=e.active!==false;e.createdAt=e.createdAt||new Date().toISOString();e.dailyRate=Number(e.dailyRate)||0;e.role=e.role||'';e.phone=e.phone||''});db.orders??=[];db.ingredients??=[];db.cash??={open:false,initial:0,movements:[]};db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.photos=(p.photos&&p.photos.length)?p.photos:(p.photo?[p.photo]:[]);p.photo=p.photos[0]||null;p.type=p.type==='pi'?'pi':'pa';p.packageType=p.packageType||'';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{id:r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{id:r&&r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true});db.ingredients.forEach(m=>{if(!isUuidLike(m.id)){const oldId=m.id,newId=uuidLike();m.id=newId;db.products.forEach(p=>{(p.recipe||[]).forEach(r=>{if(r.kind!=='pi'&&r.ingredientId===oldId)r.ingredientId=newId})})}});db.packageTypes.forEach(t=>{if(!isUuidLike(t.id)){const oldId=t.id,newId=uuidLike();t.id=newId;db.products.forEach(p=>{if(p.packageType===oldId)p.packageType=newId})}});db.payments.forEach(p=>{p.showClient??=true;p.fee=Number(p.fee)||0;p.feeFixed=Number(p.feeFixed)||0});db.coupons??=[];db.coupons.forEach(c=>{c.code=String(c.code||'').toUpperCase();c.type=c.type==='fixed'?'fixed':'percent';c.value=Number(c.value)||0;c.active??=true;c.usedCount=Number(c.usedCount)||0;c.maxUses=c.maxUses?Number(c.maxUses):null});db.hourExceptions??=[];
+function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.cancelamento??=DEFAULT.settings.messages.cancelamento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.settings.loyalty??={active:false,every:10,creditValue:20};db.categories??=structuredClone(DEFAULT.categories);db.categories.forEach(c=>{c.active=c.active!==false;c.upsell=!!c.upsell});db.products??=[];db.packageTypes??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.riders.forEach(r=>{r.active=r.active!==false;r.createdAt=r.createdAt||new Date().toISOString();r.dailyRate=Number(r.dailyRate)||0});db.employees??=[];db.employees.forEach(e=>{e.active=e.active!==false;e.createdAt=e.createdAt||new Date().toISOString();e.dailyRate=Number(e.dailyRate)||0;e.role=e.role||'';e.phone=e.phone||''});db.orders??=[];db.ingredients??=[];db.materiaSections??=[{id:uuidLike(),name:'Embalagens'},{id:uuidLike(),name:'Hortifruti'},{id:uuidLike(),name:'Molhos'},{id:uuidLike(),name:'Carnes'}];db.cash??={open:false,initial:0,movements:[]};db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.photos=(p.photos&&p.photos.length)?p.photos:(p.photo?[p.photo]:[]);p.photo=p.photos[0]||null;p.type=p.type==='pi'?'pi':'pa';p.packageType=p.packageType||'';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{id:r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{id:r&&r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true;m.section=m.section||''});db.ingredients.forEach(m=>{if(!isUuidLike(m.id)){const oldId=m.id,newId=uuidLike();m.id=newId;db.products.forEach(p=>{(p.recipe||[]).forEach(r=>{if(r.kind!=='pi'&&r.ingredientId===oldId)r.ingredientId=newId})})}});db.packageTypes.forEach(t=>{if(!isUuidLike(t.id)){const oldId=t.id,newId=uuidLike();t.id=newId;db.products.forEach(p=>{if(p.packageType===oldId)p.packageType=newId})}});db.payments.forEach(p=>{p.showClient??=true;p.fee=Number(p.fee)||0;p.feeFixed=Number(p.feeFixed)||0});db.coupons??=[];db.coupons.forEach(c=>{c.code=String(c.code||'').toUpperCase();c.type=c.type==='fixed'?'fixed':'percent';c.value=Number(c.value)||0;c.active??=true;c.usedCount=Number(c.usedCount)||0;c.maxUses=c.maxUses?Number(c.maxUses):null});db.hourExceptions??=[];
  db.customerSeq??=0;
  db.customers.forEach(c=>{
   c.addresses??=[];
@@ -1757,6 +1795,7 @@ function renderOverlay(){
  if(overlay==='supplierDialog')return renderSupplierDialog();
  if(overlay==='newRider')return renderNewRiderDialog();
  if(overlay==='newFuncionario')return renderNewFuncionarioDialog();
+ if(overlay==='productComposition')return renderProductCompositionModal();
  if(overlay==='staffPay')return renderStaffPayDialog();
  if(overlay==='materiaDialog')return renderMateriaDialog();
  if(overlay==='recipeDialog')return renderRecipeDialog();
@@ -2271,20 +2310,38 @@ function renderEditProductModal(){
  <div class="field"><label>Nome</label><input autocomplete="off" id="epName" value="${esc(p.name)}"></div>
  <div class="field"><label>Categoria</label>${db.categories.length?`<div class="row" style="gap:8px"><select id="epCat" style="flex:1">${db.categories.map(c=>`<option value="${c.id}" ${c.id===p.cat?'selected':''}>${esc(c.name)}</option>`).join('')}</select><button type="button" class="btn" id="epNewCatToggle" style="white-space:nowrap">+ Novo</button></div><div id="epNewCatWrap" style="display:none;margin-top:8px"><input autocomplete="off" id="epNewCatName" placeholder="Nome da nova categoria"></div>`:`<input autocomplete="off" id="epNewCatName" placeholder="Nome da nova categoria"><p class="meta" style="margin-top:6px">Nenhuma categoria cadastrada ainda — digite acima para criar a primeira.</p>`}</div>
  <div class="field"><label>Classificação (opcional)</label><select id="epPackageType"><option value="">Nenhuma</option>${(db.packageTypes||[]).map(t=>`<option value="${t.id}" ${t.id===p.packageType?'selected':''}>${esc(t.name)}</option>`).join('')}<option value="__new__">+ Cadastrar nova classificação</option></select><p class="meta" style="margin-top:6px">Use para agrupar e ordenar o cardápio do cliente por tipo (ex.: Lata, PET, Garrafa) — dentro da mesma categoria, os produtos aparecem agrupados por classificação e em ordem alfabética.</p></div>
+ <div class="cardbox" style="margin-top:14px"><h3>💰 Preço e estoque</h3>
  <div class="formgrid"><div class="field"><label>Custo (calculado automaticamente)</label><input autocomplete="off" id="epCost" type="text" value="${money(productAvgCost(p.id))}" disabled></div><div class="field"><label>Valor de venda</label><input autocomplete="off" id="epPrice" type="text" inputmode="decimal" value="${moneyMaskFormat(p.price)}"></div></div>
  <p class="meta" style="margin-top:-6px;margin-bottom:11px">💰 Custo calculado automaticamente pela média das últimas 3 entradas de fornecedor deste produto${(db.stockMovements||[]).some(m=>m.productId===p.id&&m.type==='entrada')?'':' (ainda sem entradas registradas — o custo é atualizado ao registrar entradas em Estoque › Entradas)'}.</p>
  <div class="formgrid"><div class="field"><label>Preço antigo (opcional, para promoção)</label><input autocomplete="off" id="epOldPrice" type="text" inputmode="decimal" value="${p.oldPrice?moneyMaskFormat(p.oldPrice):''}" placeholder="0,00"></div><div class="field"><label>Estoque${productHasRecipe(p)?' (calculado pela receita)':''}</label><input autocomplete="off" id="epStock" type="number" min="0" value="${getProductStock(p)}" ${productHasRecipe(p)?'disabled title="Este produto tem receita: o estoque é calculado automaticamente a partir das matérias-primas."':''}></div></div>${productHasRecipe(p)?'<p class="meta" style="margin-top:-6px;margin-bottom:11px">📦 O estoque deste produto é calculado automaticamente com base no saldo das matérias-primas da receita.</p>':''}
  <div class="field"><label>Avisar quando o estoque ficar menor ou igual a (opcional)</label><input autocomplete="off" id="epLowStock" type="number" min="0" value="${p.lowStockThreshold||''}" placeholder="Ex.: 5"></div>
+ </div>
+ <div class="cardbox" style="margin-top:14px"><h3>📝 Descrição e fotos</h3>
  <div class="field"><label>Descrição</label><input autocomplete="off" id="epDesc" value="${esc(p.desc||'')}"></div>
  <div class="field"><label>Fotos do produto</label>${(p.photos&&p.photos.length)?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px">${p.photos.map((ph,i)=>`<div style="position:relative"><img src="${ph}" style="width:70px;height:70px;object-fit:cover;border-radius:8px;${i===0?'border:2px solid var(--mustard)':'border:2px solid transparent'}"><button type="button" class="icon-btn" data-delphoto="${i}" title="Remover esta foto" style="position:absolute;top:-6px;right:-6px;background:var(--bg);border:1px solid var(--line);border-radius:50%;width:22px;height:22px;padding:0;font-size:12px;line-height:1">✕</button>${i>0?`<button type="button" data-photoup="${i}" title="Mover pra frente" style="position:absolute;bottom:-6px;left:-6px;background:var(--bg);border:1px solid var(--line);border-radius:50%;width:20px;height:20px;padding:0;font-size:11px;line-height:1;cursor:pointer">↑</button>`:''}</div>`).join('')}</div><p class="meta" style="margin:0 0 8px">A primeira foto (com borda) é a capa mostrada no cardápio.</p>`:''}<input type="file" id="epPhoto" accept="image/*" multiple><div id="epPhotoPreview" style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap"></div></div>
- ${curType!=='pi'?`<div class="field"><label>Adicionais disponíveis neste produto</label>${db.addons.length?db.addons.map(a=>{const ex=(p.addons||[]).find(o=>o.id===a.id),cur=ex?Math.min(a.max,ex.max):a.max;return `<div class="addon-choice"><label style="display:flex;align-items:center;gap:8px;flex:1;cursor:pointer;margin:0"><input type="checkbox" data-editaddon="${a.id}" ${ex?'checked':''}><span><b>${esc(a.name)}</b><div class="meta">+ ${money(a.price)} · limite global ${a.max}</div></span></label><div class="addon-counter"><button type="button" data-editaddon-minus="${a.id}">−</button><span id="editAddonMax_${a.id}">${cur}</span><button type="button" data-editaddon-plus="${a.id}">+</button></div></div>`}).join(''):'<span class="meta">Nenhum adicional cadastrado.</span>'}<p class="meta" style="margin-top:4px">Marque os adicionais permitidos e use +/− para definir quantas unidades este produto aceita de cada um.</p></div>`:''}
- <div class="field"><label>Receita / Combo (matérias-primas, PI ou outros produtos do cardápio)</label><div id="recipeList">${(p.recipe||[]).length?p.recipe.map((r,idx)=>{const info=recipeItemInfo(r);return `<div class="itemrow itemrow-clickable" data-recipeidx="${idx}" style="cursor:pointer"><div class="row"><b>${info.icon} ${esc(info.name)}</b><span class="meta">${r.qty} ${esc(info.unit)}</span></div><button type="button" class="btn" data-delrecipe="${idx}" style="margin-top:8px">Remover</button><div class="meta" style="opacity:.65;margin-top:4px">Toque para alterar item ou quantidade ›</div></div>`}).join(''):'<p class="meta">Nenhum item na receita.</p>'}</div><button type="button" class="btn" id="addRecipeBtn">+ Adicionar item à receita</button><p class="meta" style="margin-top:6px">💡 Para criar um combo: cadastre este produto como PA, deixe a descrição explicando o que está incluso (ela sairá impressa na comanda) e adicione aqui os produtos que fazem parte dele — o estoque de cada um é descontado automaticamente quando o combo é vendido.</p></div>
+ </div>
+ ${curType!=='pi'?`<div class="cardbox" style="margin-top:14px"><h3>➕ Adicionais</h3><div class="field"><label>Adicionais disponíveis neste produto</label>${db.addons.length?db.addons.map(a=>{const ex=(p.addons||[]).find(o=>o.id===a.id),cur=ex?Math.min(a.max,ex.max):a.max;return `<div class="addon-choice"><label style="display:flex;align-items:center;gap:8px;flex:1;cursor:pointer;margin:0"><input type="checkbox" data-editaddon="${a.id}" ${ex?'checked':''}><span><b>${esc(a.name)}</b><div class="meta">+ ${money(a.price)} · limite global ${a.max}</div></span></label><div class="addon-counter"><button type="button" data-editaddon-minus="${a.id}">−</button><span id="editAddonMax_${a.id}">${cur}</span><button type="button" data-editaddon-plus="${a.id}">+</button></div></div>`}).join(''):'<span class="meta">Nenhum adicional cadastrado.</span>'}<p class="meta" style="margin-top:4px">Marque os adicionais permitidos e use +/− para definir quantas unidades este produto aceita de cada um.</p></div></div>`:''}
+ <div class="cardbox" style="margin-top:14px"><div class="row" style="align-items:center"><h3 style="margin:0">🧾 Receita / Composição</h3>${(p.recipe||[]).length?`<button type="button" class="btn" id="viewCompositionBtn" style="width:auto;padding:6px 12px;font-size:12px">📋 Ver composição completa</button>`:''}</div>
+ <div class="field" style="margin-top:8px"><label>Itens (matérias-primas, PI ou outros produtos do cardápio)</label><div id="recipeList">${(p.recipe||[]).length?p.recipe.map((r,idx)=>{const info=recipeItemInfo(r);return `<div class="itemrow itemrow-clickable" data-recipeidx="${idx}" style="cursor:pointer"><div class="row"><b>${info.icon} ${esc(info.name)}</b><span class="meta">${r.qty} ${esc(info.unit)}</span></div><button type="button" class="btn" data-delrecipe="${idx}" style="margin-top:8px">Remover</button><div class="meta" style="opacity:.65;margin-top:4px">Toque para alterar item ou quantidade ›</div></div>`}).join(''):'<p class="meta">Nenhum item na receita.</p>'}</div><button type="button" class="btn" id="addRecipeBtn">+ Adicionar item à receita</button><p class="meta" style="margin-top:6px">💡 Para criar um combo: cadastre este produto como PA, deixe a descrição explicando o que está incluso (ela sairá impressa na comanda) e adicione aqui os produtos que fazem parte dele — o estoque de cada um é descontado automaticamente quando o combo é vendido.</p></div>
+ </div>
+ <div class="cardbox" style="margin-top:14px"><h3>👁️ Visibilidade</h3>
  <label class="chip"><input type="checkbox" id="epShowStock" ${p.showStock?'checked':''}> Exibir estoque ao cliente</label>
  <label class="chip" style="margin-left:8px"><input type="checkbox" id="epActive" ${p.active?'checked':''}> Produto ativo</label>
+ </div>
  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  <button class="primary" id="saveEditProduct">Salvar alterações</button>
  <button class="ghost" id="cancelEditProduct">Cancelar</button>
  <button class="ghost" id="deleteProduct">Excluir produto</button>
+ </div></div>`;
+}
+function renderProductCompositionModal(){
+ const p=db.products.find(x=>x.id===window.viewingComposition);if(!p)return '';
+ const rows=(p.recipe||[]).map(r=>{const info=recipeItemInfo(r);return {name:info.name,unit:info.unit,icon:info.icon,qty:r.qty}});
+ return `<div class="overlay show"><div class="panel">
+ <div class="head"><h2>Composição · ${esc(p.name)}</h2><button class="x" id="closeCompositionX">×</button></div>
+ ${p.desc?`<p class="meta" style="margin-top:-6px">${esc(p.desc)}</p>`:''}
+ ${rows.length?`<div class="stock-table-wrap"><table class="stock-table"><thead><tr><th>Nr.</th><th>Item</th><th>Qtd.</th><th>Un.</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td>${i+1}</td><td>${r.icon} ${esc(r.name)}</td><td>${r.qty}</td><td>${esc((r.unit||'').toUpperCase())}</td></tr>`).join('')}</tbody></table></div><p class="meta" style="margin-top:10px">💰 Custo total estimado da receita: <b>${money(productUnitCost(p))}</b></p>`:'<p class="meta">Este produto ainda não tem itens de receita cadastrados. Cadastre em "Editar produto › Receita / Composição".</p>'}
+ <button class="ghost" id="closeComposition" style="margin-top:14px">Fechar</button>
  </div></div>`;
 }
 function downloadProductTemplate(){
@@ -2327,6 +2384,27 @@ function handlePackageTypeSelect(selectEl){
   selectEl.value='';
  }
 }
+function findOrCreateMateriaSectionByName(name){
+ name=String(name||'').trim();if(!name)return null;
+ db.materiaSections=db.materiaSections||[];
+ let t=db.materiaSections.find(x=>x.name.toLowerCase()===name.toLowerCase());
+ if(!t){t={id:uuidLike(),name};db.materiaSections.push(t)}
+ return t;
+}
+function handleMateriaSectionSelect(selectEl){
+ if(!selectEl||selectEl.value!=='__new__')return;
+ const name=prompt('Nome da nova seção (ex.: Embalagens, Hortifruti, Molhos, Carnes):','');
+ if(name&&name.trim()){
+  const t={id:uuidLike(),name:name.trim()};
+  db.materiaSections=db.materiaSections||[];
+  db.materiaSections.push(t);
+  save();
+  selectEl.innerHTML=`<option value="">Sem seção</option>${db.materiaSections.map(x=>`<option value="${x.id}" ${x.id===t.id?'selected':''}>${esc(x.name)}</option>`).join('')}<option value="__new__">+ Cadastrar nova seção</option>`;
+ }else{
+  selectEl.value='';
+ }
+}
+function materiaSectionName(sid){const t=(db.materiaSections||[]).find(x=>x.id===sid);return t?t.name:''}
 function normalizeProductName(s){return String(s||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')}
 function findExistingProductByNameCat(name,catId){return db.products.find(p=>p.cat===catId&&normalizeProductName(p.name)===normalizeProductName(name))}
 function importProductsFromSheet(file){
@@ -2473,6 +2551,8 @@ function renderReports(){
  const payMap={}; completed.forEach(o=>{let ps=o.customer.payments||[{payment:o.customer.payment,amount:o.total}];ps.forEach(x=>{let p=db.payments.find(y=>y.id===x.payment);payMap[x.payment]=(payMap[x.payment]||0)+Number(x.amount||0)})});
  const prod={},adds={},fees=completed.reduce((s,o)=>s+(o.customer.delivery==='entrega'?Number(o.deliveryFee||0):0),0); completed.forEach(o=>o.items.forEach(x=>{prod[x.productId]=(prod[x.productId]||0)+x.qty;(x.addons||[]).forEach(a=>adds[a.id]=(adds[a.id]||0)+a.qty*x.qty)}));
  const inv=db.products.reduce((s,p)=>s+getProductStock(p)*p.price,0)+db.addons.reduce((s,a)=>s+a.stock*a.price,0); const credit=completed.filter(o=>o.customer.payment==='fiado'||(o.customer.payments||[]).some(x=>x.payment==='fiado')).filter(o=>!o.paidAt);
+ const materiaInv=(db.ingredients||[]).reduce((s,m)=>s+getIngredientAvailable(m.id)*Number(m.cost||0),0);
+ const materiaGroups=[...(db.materiaSections||[]),{id:'',name:'Sem seção'}].map(sec=>({sec,items:db.ingredients.filter(m=>(m.section||'')===sec.id)})).filter(g=>g.items.length);
  const diariaMovs=(db.cash.movements||[]).filter(m=>m.source==='diaria').map(m=>({...m,date:m.date||today})).filter(m=>{const dd=String(m.date).slice(0,10);return (!f.from||dd>=f.from)&&(!f.to||dd<=f.to)}).sort((a,b)=>new Date(b.date)-new Date(a.date));
  const diariaTotal=diariaMovs.reduce((s,m)=>s+Number(m.value||0),0);
  const diariaByPerson={};
@@ -2483,7 +2563,7 @@ function renderReports(){
  </div>
  ${renderVendasDoDiaPanel()}
  ${renderItensVendidosPanel()}
- <div class="report-panel report-entrega" style="display:${window.reportView==='entrega'?'block':'none'}"><div class="cardbox"><h3>Relatório de Entregas</h3><div class="grid2"><div class="field"><label>Data inicial</label><input id="rfFromEntrega" type="date" value="${f.from}"></div><div class="field"><label>Data final</label><input id="rfToEntrega" type="date" value="${f.to}"></div><div class="field"><label>Entregador</label><select id="rfRider"><option value="">Todos os entregadores</option>${db.riders.map(r=>`<option value="${r.id}" ${deliveryRider===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}</select></div></div><button class="primary" id="applyDeliveryReport">Aplicar filtros</button></div><div class="metric"><div><span class="meta">Taxas de entrega no período</span><b>${money(deliveryOrders.reduce((sum,o)=>sum+Number(o.deliveryFee||0),0))}</b></div><div><span class="meta">Entregas concluídas</span><b>${deliveryOrders.length}</b></div></div><div class="cardbox"><h3>Taxa por entregador</h3>${Object.entries(deliveryByRider).map(([rid,val])=>`<div class="itemrow"><span>${esc(db.riders.find(r=>r.id===rid)?.name||'Sem entregador')}</span><b>${money(val)}</b></div>`).join('')||'<span class="meta">Nenhuma entrega concluída no período.</span>'}</div></div><div class="report-panel report-estoque" style="display:${window.reportView==='estoque_valor'?'block':'none'}"><div class="cardbox"><h3>Valor estimado do estoque</h3><div class="metric"><div><span class="meta">Estoque atual</span><b>${money(inv)}</b></div></div><p class="meta">Estimativa calculada pela quantidade em estoque multiplicada pelo preço cadastrado.</p></div><div class="cardbox"><h3>Produtos</h3>${db.products.map(p=>{const st=getProductStock(p);return `<div class="itemrow"><div class="row"><b>${esc(p.name)}</b><span class="${st?'':'sold'}">${st} un.</span></div><div class="meta">Valor unitário: ${money(p.price)} · Total: ${money(st*p.price)}</div></div>`}).join('')||'<span class="meta">Nenhum produto cadastrado.</span>'}</div><div class="cardbox"><h3>Adicionais</h3>${db.addons.map(a=>`<div class="itemrow"><div class="row"><b>${esc(a.name)}</b><span class="${a.stock?'':'sold'}">${a.stock} un.</span></div><div class="meta">Valor unitário: ${money(a.price)} · Total: ${money(a.stock*a.price)}</div></div>`).join('')||'<span class="meta">Nenhum adicional cadastrado.</span>'}</div></div><div class="report-panel report-diarias" style="display:${window.reportView==='diarias'?'block':'none'}"><div class="cardbox"><h3>Diárias pagas (${f.from} a ${f.to})</h3><div class="metric"><div><span class="meta">Total pago</span><b>${money(diariaTotal)}</b></div><div><span class="meta">Pagamentos no período</span><b>${diariaMovs.length}</b></div></div></div><div class="cardbox"><h3>Por pessoa</h3>${Object.values(diariaByPerson).sort((a,b)=>b.total-a.total).map(x=>`<div class="itemrow"><div class="row"><b>${esc(x.name)}${x.role?' · '+esc(x.role):''}</b><b>${money(x.total)}</b></div><div class="meta">${x.count} pagamento${x.count>1?'s':''}</div></div>`).join('')||'<span class="meta">Nenhum pagamento de diária no período.</span>'}</div><div class="cardbox"><h3>Histórico</h3>${diariaMovs.map(m=>`<div class="itemrow"><div class="row"><b>${esc(m.staffName||'—')}${m.staffRole?' · '+esc(m.staffRole):''}</b><b>${money(m.value)}</b></div><div class="meta">${fmtDT(m.date)} · ${esc(cashMethodName(m.method))}${m.note?' · '+esc(m.note):''}</div></div>`).join('')||'<span class="meta">Nenhum pagamento de diária no período.</span>'}</div></div><div class="report-panel report-inadimplentes" style="display:${window.reportView==='inadimplentes'?'block':'none'}"><div class="cardbox"><h3>Inadimplentes — Fiado</h3>${credit.map(o=>`<div class="itemrow"><b>${esc(o.customer.name)}</b> · ${money(o.total)} · ${o.id} <button class="btn" data-paid="${o.id}">Marcar como pago</button></div>`).join('')||'<span class="meta">Nenhum cliente inadimplente.</span>'}</div></div>`;
+ <div class="report-panel report-entrega" style="display:${window.reportView==='entrega'?'block':'none'}"><div class="cardbox"><h3>Relatório de Entregas</h3><div class="grid2"><div class="field"><label>Data inicial</label><input id="rfFromEntrega" type="date" value="${f.from}"></div><div class="field"><label>Data final</label><input id="rfToEntrega" type="date" value="${f.to}"></div><div class="field"><label>Entregador</label><select id="rfRider"><option value="">Todos os entregadores</option>${db.riders.map(r=>`<option value="${r.id}" ${deliveryRider===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}</select></div></div><button class="primary" id="applyDeliveryReport">Aplicar filtros</button></div><div class="metric"><div><span class="meta">Taxas de entrega no período</span><b>${money(deliveryOrders.reduce((sum,o)=>sum+Number(o.deliveryFee||0),0))}</b></div><div><span class="meta">Entregas concluídas</span><b>${deliveryOrders.length}</b></div></div><div class="cardbox"><h3>Taxa por entregador</h3>${Object.entries(deliveryByRider).map(([rid,val])=>`<div class="itemrow"><span>${esc(db.riders.find(r=>r.id===rid)?.name||'Sem entregador')}</span><b>${money(val)}</b></div>`).join('')||'<span class="meta">Nenhuma entrega concluída no período.</span>'}</div></div><div class="report-panel report-estoque" style="display:${window.reportView==='estoque_valor'?'block':'none'}"><div class="cardbox"><h3>Valor estimado do estoque</h3><div class="metric"><div><span class="meta">Estoque atual (produtos e adicionais)</span><b>${money(inv)}</b></div><div><span class="meta">Matérias-primas (custo)</span><b>${money(materiaInv)}</b></div></div><p class="meta">Estimativa calculada pela quantidade em estoque multiplicada pelo preço cadastrado (produtos/adicionais) ou pelo custo por unidade (matérias-primas).</p></div><div class="cardbox"><h3>Produtos</h3>${db.products.map(p=>{const st=getProductStock(p);return `<div class="itemrow"><div class="row"><b>${esc(p.name)}</b><span class="${st?'':'sold'}">${st} un.</span></div><div class="meta">Valor unitário: ${money(p.price)} · Total: ${money(st*p.price)}</div></div>`}).join('')||'<span class="meta">Nenhum produto cadastrado.</span>'}</div><div class="cardbox"><h3>Adicionais</h3>${db.addons.map(a=>`<div class="itemrow"><div class="row"><b>${esc(a.name)}</b><span class="${a.stock?'':'sold'}">${a.stock} un.</span></div><div class="meta">Valor unitário: ${money(a.price)} · Total: ${money(a.stock*a.price)}</div></div>`).join('')||'<span class="meta">Nenhum adicional cadastrado.</span>'}</div><div class="cardbox"><h3>Matérias-primas (por seção)</h3>${materiaGroups.map(g=>{const groupTotal=g.items.reduce((s,m)=>s+getIngredientAvailable(m.id)*Number(m.cost||0),0);return `<h4 style="margin:10px 0 4px">${esc(g.sec.name)} · ${money(groupTotal)}</h4>${g.items.map(m=>{const av=getIngredientAvailable(m.id);return `<div class="itemrow"><div class="row"><b>${esc(m.name)}</b><span>${av} ${esc(m.unit)}</span></div><div class="meta">Custo: ${moneyPrecise(m.cost||0)}/${esc(m.unit)} · Total: ${money(av*Number(m.cost||0))}</div></div>`}).join('')}`}).join('')||'<span class="meta">Nenhuma matéria-prima cadastrada.</span>'}</div></div><div class="report-panel report-diarias" style="display:${window.reportView==='diarias'?'block':'none'}"><div class="cardbox"><h3>Diárias pagas (${f.from} a ${f.to})</h3><div class="metric"><div><span class="meta">Total pago</span><b>${money(diariaTotal)}</b></div><div><span class="meta">Pagamentos no período</span><b>${diariaMovs.length}</b></div></div></div><div class="cardbox"><h3>Por pessoa</h3>${Object.values(diariaByPerson).sort((a,b)=>b.total-a.total).map(x=>`<div class="itemrow"><div class="row"><b>${esc(x.name)}${x.role?' · '+esc(x.role):''}</b><b>${money(x.total)}</b></div><div class="meta">${x.count} pagamento${x.count>1?'s':''}</div></div>`).join('')||'<span class="meta">Nenhum pagamento de diária no período.</span>'}</div><div class="cardbox"><h3>Histórico</h3>${diariaMovs.map(m=>`<div class="itemrow"><div class="row"><b>${esc(m.staffName||'—')}${m.staffRole?' · '+esc(m.staffRole):''}</b><b>${money(m.value)}</b></div><div class="meta">${fmtDT(m.date)} · ${esc(cashMethodName(m.method))}${m.note?' · '+esc(m.note):''}</div></div>`).join('')||'<span class="meta">Nenhum pagamento de diária no período.</span>'}</div></div><div class="report-panel report-inadimplentes" style="display:${window.reportView==='inadimplentes'?'block':'none'}"><div class="cardbox"><h3>Inadimplentes — Fiado</h3>${credit.map(o=>`<div class="itemrow"><b>${esc(o.customer.name)}</b> · ${money(o.total)} · ${o.id} <button class="btn" data-paid="${o.id}">Marcar como pago</button></div>`).join('')||'<span class="meta">Nenhum cliente inadimplente.</span>'}</div></div>`;
 }
 
 const STOCK_SAIDA_REASONS=['Falta','Avaria','Desperdício','Contagem','Outros'];
@@ -2585,9 +2665,9 @@ function itemPickerResultsHtml(kind){
  if(!q||!d.open)return `<div id="${wrapId}" class="pdv-results" style="display:none"></div>`;
  const nq=normStr(q);
  const prods=db.products.filter(p=>!productHasRecipe(p)&&normStr(p.name).includes(nq)).map(p=>({type:'produto',id:p.id,name:p.name,unit:'un',stock:getProductStock(p)}));
- const ings=db.ingredients.filter(i=>i.active!==false&&normStr(i.name).includes(nq)).map(i=>({type:'materia',id:i.id,name:i.name,unit:i.unit||'',stock:getIngredientAvailable(i.id)}));
+ const ings=db.ingredients.filter(i=>i.active!==false&&normStr(i.name).includes(nq)).map(i=>({type:'materia',id:i.id,name:i.name,unit:i.unit||'',stock:getIngredientAvailable(i.id),section:materiaSectionName(i.section)}));
  const filtered=[...prods,...ings].sort((a,b)=>a.name.localeCompare(b.name,'pt-BR')).slice(0,10);
- return `<div id="${wrapId}" class="pdv-results" style="position:absolute;left:0;right:0;top:100%;z-index:10">${filtered.length?filtered.map(i=>`<button type="button" class="pdv-result" data-item-pick="${kind}|${i.type}|${i.id}"><b>${esc(i.name)}</b><span>${i.type==='produto'?'🍔 Produto':'🧪 Matéria-prima'} · Estoque atual: ${i.stock} ${esc(i.unit)}</span></button>`).join(''):'<div class="meta" style="padding:8px">Nenhum produto ou matéria-prima encontrado com esse nome. (Produtos com receita não aparecem aqui: o estoque deles é calculado automaticamente.)</div>'}</div>`;
+ return `<div id="${wrapId}" class="pdv-results" style="position:absolute;left:0;right:0;top:100%;z-index:10">${filtered.length?filtered.map(i=>`<button type="button" class="pdv-result" data-item-pick="${kind}|${i.type}|${i.id}"><b>${esc(i.name)}</b><span>${i.type==='produto'?'🍔 Produto':'🧪 Matéria-prima'}${i.section?' · '+esc(i.section):''} · Estoque atual: ${i.stock} ${esc(i.unit)}</span></button>`).join(''):'<div class="meta" style="padding:8px">Nenhum produto ou matéria-prima encontrado com esse nome. (Produtos com receita não aparecem aqui: o estoque deles é calculado automaticamente.)</div>'}</div>`;
 }
 function itemPickerBelowHtml(kind){
  const d=itemDraftFor(kind);
@@ -2831,7 +2911,7 @@ function renderStockGeral(){
 function renderStockProdRow(p,unlocked,priceUnlocked){
  const st=getProductStock(p),hasR=productHasRecipe(p),alertLevel=stockAlertLevel(st,p.lowStockThreshold);
  return `<tr>
- <td><button type="button" class="stock-prod-name" data-editprod="${p.id}">${esc(p.name)}</button>${hasR?' <span class="tag">🧾 receita</span>':''}${p.type==='pi'?' <span class="tag">PI</span>':''}</td>
+ <td><button type="button" class="stock-prod-name" data-editprod="${p.id}">${esc(p.name)}</button>${hasR?` <span class="tag">🧾 receita</span> <button type="button" class="icon-btn" data-viewcomposition="${p.id}" onclick="event.stopPropagation()" title="Ver composição completa">📋</button>`:''}${p.type==='pi'?' <span class="tag">PI</span>':''}</td>
  <td>${priceUnlocked?`<input autocomplete="off" data-editprice="${p.id}" type="text" inputmode="decimal" value="${moneyMaskFormat(p.price)}" style="width:80px;text-align:right;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:6px;padding:5px 6px">`:`<span class="price">${money(p.price)}</span>`}</td>
  <td>${unlocked&&!hasR?`<input autocomplete="off" data-editstock="product|${p.id}" type="number" min="0" value="${st}" style="width:70px;text-align:right;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:6px;padding:5px 6px">`:`<span class="${st?'':'sold'}" title="${alertLevel==='low'?'Estoque baixo':''}">${alertLevel==='low'?'⚠️ ':''}${st}</span>`}</td>
  <td style="text-align:center"><button type="button" class="toggle-btn ${p.active?'active':''}" data-togglestockprod="${p.id}" onclick="event.stopPropagation()" title="Ativar ou desativar este produto"></button></td>
@@ -3196,7 +3276,10 @@ function renderCadastroMaterias(){
   if(db.ingredients.length===0){
    html+=`<span class="meta">Nenhuma matéria-prima cadastrada. Clique em "Cadastrar nova matéria-prima" para começar.</span>`;
   }else{
-   db.ingredients.forEach(m=>{
+   const groups=[...(db.materiaSections||[]),{id:'',name:'Sem seção'}].map(sec=>({sec,items:db.ingredients.filter(m=>(m.section||'')===sec.id)})).filter(g=>g.items.length);
+   groups.forEach(g=>{
+    html+=`<details class="stock-cat" open style="margin-bottom:10px"><summary>${esc(g.sec.name)} <span class="meta">(${g.items.length})</span></summary><div style="padding-top:8px">`;
+    g.items.forEach(m=>{
     const available=getIngredientAvailable(m.id);
     const usedBy=db.products.filter(p=>(p.recipe||[]).some(r=>r.ingredientId===m.id));
     const alertLevel=stockAlertLevel(available,m.lowStockThreshold);
@@ -3218,6 +3301,8 @@ function renderCadastroMaterias(){
       📦 Estoque atual: <b style="color:${availColor}">${available}</b> ${esc(m.unit)} · 💰 ${moneyPrecise(m.cost||0)}/${esc(m.unit)}${usedBy.length?` · Usada em: ${usedBy.map(p=>esc(p.name)).join(', ')}`:''}
      </div>
     </div>`;
+    });
+    html+=`</div></details>`;
    });
   }
   
@@ -3331,6 +3416,7 @@ function renderMateriaDialog(){
  return `<div class="overlay show"><div class="panel" style="max-width:500px">
  <div class="head"><h2>${isEdit?'Editar matéria-prima':'Cadastrar nova matéria-prima'}</h2><button class="x" id="closeOverlay">×</button></div>
  <div class="field"><label>Nome</label><input autocomplete="off" id="dialogMatName" value="${esc(d.name||'')}" placeholder="Ex.: Blend 120g, Pão brioche, Maionese da casa"></div>
+ <div class="field"><label>Seção (opcional)</label><select id="dialogMatSection"><option value="">Sem seção</option>${(db.materiaSections||[]).map(t=>`<option value="${t.id}" ${t.id===d.section?'selected':''}>${esc(t.name)}</option>`).join('')}<option value="__new__">+ Cadastrar nova seção</option></select><p class="meta" style="margin-top:6px">Use para agrupar itens parecidos, ex.: Embalagens, Hortifruti, Molhos, Carnes.</p></div>
  <div class="field"><label>Unidade de medida</label><select id="dialogMatUnit"><option value="">Selecione</option>${materiaUnitOptionsHtml(d.unit||'')}</select></div>
  <div class="grid2">
   <div class="field"><label>Estoque atual</label><input autocomplete="off" id="dialogMatStock" type="number" value="${d.stock||''}" placeholder="0"></div>
@@ -3367,7 +3453,7 @@ function renderRecipeDialog(){
   :kind==='pa'?
   `<div class="field"><label>Produto (PA)</label><select id="recipeProductSelect">${paOptions.length?paOptions.map(sp=>`<option value="${sp.id}" ${cur&&cur.kind==='pi'&&cur.productId===sp.id?'selected':''}>${esc(sp.name)}</option>`).join(''):'<option disabled>Nenhum produto disponível (evite ciclos de receita)</option>'}</select><p class="meta" style="margin-top:6px">Use isto para montar combos com produtos já vendidos separadamente — o estoque dele será descontado normalmente.</p></div>`
   :
-  `<div class="field"><label>Matéria-prima</label><select id="recipeIngredientSelect">${db.ingredients.map(ing=>`<option value="${ing.id}" ${cur&&cur.kind!=='pi'&&cur.ingredientId===ing.id?'selected':''}>${esc(ing.name)} (${esc(ing.unit)})</option>`).join('')||'<option disabled>Nenhuma matéria-prima cadastrada</option>'}</select></div>`
+  `<div class="field"><label>Matéria-prima</label><select id="recipeIngredientSelect">${[...(db.materiaSections||[]),{id:'',name:'Sem seção'}].map(sec=>({sec,items:db.ingredients.filter(ing=>(ing.section||'')===sec.id)})).filter(g=>g.items.length).map(g=>`<optgroup label="${esc(g.sec.name)}">${g.items.map(ing=>`<option value="${ing.id}" ${cur&&cur.kind!=='pi'&&cur.ingredientId===ing.id?'selected':''}>${esc(ing.name)} (${esc(ing.unit)})</option>`).join('')}</optgroup>`).join('')||'<option disabled>Nenhuma matéria-prima cadastrada</option>'}</select></div>`
  }
  <div class="field"><label>Quantidade</label><input autocomplete="off" id="recipeQty" type="number" step=".01" value="${cur?cur.qty:1}" min="0.01" placeholder="1"></div>
  <button class="primary" id="confirmRecipeAdd">${isEdit?'Salvar alterações':'Adicionar à receita'}</button>
@@ -3824,6 +3910,10 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
   window.npPhotoDataList=null;formErr='';overlay=null;save();render()
  });
  document.querySelectorAll('[data-editprod]').forEach(e=>e.onclick=()=>{window.editingProduct=e.dataset.editprod;window.epPhotoDataList=null;window.epTypeSelected=null;const p=db.products.find(x=>x.id===e.dataset.editprod);window.epSnapshot=p?JSON.parse(JSON.stringify(p)):null;window.epIsNewDup=false;formErr='';overlay='editProduct';render()});
+ document.querySelectorAll('[data-viewcomposition]').forEach(e=>e.addEventListener('click',ev=>{ev.stopPropagation();window.viewingComposition=e.dataset.viewcomposition;window.compositionReturnTo=null;overlay='productComposition';render()}));
+ document.getElementById('viewCompositionBtn')?.addEventListener('click',()=>{window.viewingComposition=window.editingProduct;window.compositionReturnTo='editProduct';overlay='productComposition';render()});
+ document.getElementById('closeCompositionX')?.addEventListener('click',()=>{overlay=window.compositionReturnTo||null;window.compositionReturnTo=null;window.viewingComposition=null;render()});
+ document.getElementById('closeComposition')?.addEventListener('click',()=>{overlay=window.compositionReturnTo||null;window.compositionReturnTo=null;window.viewingComposition=null;render()});
  document.getElementById('epPhoto')?.addEventListener('change',async(e)=>{
   const files=[...e.target.files];if(!files.length)return;
   window.epPhotoDataList=window.epPhotoDataList||[];
@@ -4231,8 +4321,9 @@ document.getElementById('deleteAddonDialog')?.addEventListener('click',()=>{if(!
  });
  document.getElementById('deleteSupplierDialog')?.addEventListener('click',()=>{if(!window.editingSupplier)return;if(!confirm('Excluir este fornecedor?'))return;db.suppliers=db.suppliers.filter(x=>x.id!==window.editingSupplier);window.editingSupplier=null;window.supplierDraft={};overlay=null;save();render()});
  document.getElementById('newMateriaBtn')?.addEventListener('click',()=>{window.editingMateria=null;window.materiaDraft={};formErr='';overlay='materiaDialog';render()});
- document.querySelectorAll('[data-clickmateria]').forEach(e=>e.onclick=()=>{let mid=e.dataset.clickmateria;let m=db.ingredients.find(x=>x.id===mid);if(!m)return;window.editingMateria=mid;window.materiaDraft={name:m.name,unit:m.unit,stock:m.stock,cost:m.cost};formErr='';overlay='materiaDialog';render()});
- document.getElementById('saveMateriaDialog')?.addEventListener('click',()=>{let n=document.getElementById('dialogMatName').value.trim(),unit=document.getElementById('dialogMatUnit').value.trim(),stockRaw=document.getElementById('dialogMatStock').value,costRaw=document.getElementById('dialogMatCost').value,stock=Math.max(0,Number(stockRaw||0)),cost=Math.max(0,parseFloat(String(costRaw||'0').replace(',','.'))||0),lowStock=Math.max(0,Number(document.getElementById('dialogMatLowStock')?.value||0))||null;window.materiaDraft={name:n,unit,stock:stockRaw,cost:costRaw,lowStockThreshold:lowStock};if(!n||!unit){formErr='Informe nome e unidade de medida.';render();return}if(window.editingMateria){let m=db.ingredients.find(x=>x.id===window.editingMateria);if(!m)return;m.name=n;m.unit=unit;m.stock=stock;m.cost=cost;m.lowStockThreshold=lowStock;window.editingMateria=null}else{db.ingredients.push({id:uuidLike(),name:n,unit,stock,cost,active:true,lowStockThreshold:lowStock})}window.materiaDraft={};formErr='';overlay=null;save();render()});
+ document.getElementById('dialogMatSection')?.addEventListener('change',e=>handleMateriaSectionSelect(e.target));
+ document.querySelectorAll('[data-clickmateria]').forEach(e=>e.onclick=()=>{let mid=e.dataset.clickmateria;let m=db.ingredients.find(x=>x.id===mid);if(!m)return;window.editingMateria=mid;window.materiaDraft={name:m.name,unit:m.unit,stock:m.stock,cost:m.cost,section:m.section||''};formErr='';overlay='materiaDialog';render()});
+ document.getElementById('saveMateriaDialog')?.addEventListener('click',()=>{let n=document.getElementById('dialogMatName').value.trim(),unit=document.getElementById('dialogMatUnit').value.trim(),section=document.getElementById('dialogMatSection')?.value||'',stockRaw=document.getElementById('dialogMatStock').value,costRaw=document.getElementById('dialogMatCost').value,stock=Math.max(0,Number(stockRaw||0)),cost=Math.max(0,parseFloat(String(costRaw||'0').replace(',','.'))||0),lowStock=Math.max(0,Number(document.getElementById('dialogMatLowStock')?.value||0))||null;window.materiaDraft={name:n,unit,section,stock:stockRaw,cost:costRaw,lowStockThreshold:lowStock};if(!n||!unit){formErr='Informe nome e unidade de medida.';render();return}if(window.editingMateria){let m=db.ingredients.find(x=>x.id===window.editingMateria);if(!m)return;m.name=n;m.unit=unit;m.section=section;m.stock=stock;m.cost=cost;m.lowStockThreshold=lowStock;window.editingMateria=null}else{db.ingredients.push({id:uuidLike(),name:n,unit,section,stock,cost,active:true,lowStockThreshold:lowStock})}window.materiaDraft={};formErr='';overlay=null;save();render()});
  document.getElementById('deleteMateriaDialog')?.addEventListener('click',()=>{if(!window.editingMateria)return;let mid=window.editingMateria;if(!confirm('Excluir esta matéria-prima? Receitas que a usam também serão afetadas.'))return;db.ingredients=db.ingredients.filter(x=>x.id!==mid);db.products.forEach(p=>{p.recipe=(p.recipe||[]).filter(r=>r.ingredientId!==mid)});window.editingMateria=null;window.materiaDraft={};overlay=null;save();render()});
  document.querySelectorAll('[data-editrecipe]').forEach(e=>e.onclick=(ev)=>{if(ev.target.closest('button'))return;let pid=e.dataset.editrecipe;let p=db.products.find(x=>x.id===pid);if(!p)return;window.editingProduct=pid;window.recipeForProduct=pid;overlay='editProduct';render()});
  document.querySelectorAll('[data-addrecipe]').forEach(e=>e.onclick=(ev)=>{ev.stopPropagation();let pid=e.dataset.addrecipe;let p=db.products.find(x=>x.id===pid);if(!p)return;if(!p.recipe)p.recipe=[];window.editingProduct=pid;window.recipeForProduct=pid;window.editingRecipeIdx=null;window.recipeDraftKind=null;overlay='recipeDialog';save();render()});
