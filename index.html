@@ -474,6 +474,15 @@ async function loadMenuFromSupabase(){
    }
   }catch(e){}
   try{
+   // Mesma coisa para as colunas de unidade de compra (conversão caixa/
+   // pacote → unidade) — sem travar caso ainda não existam no Supabase.
+   const ingPurR=await sb.from('ingredients').select('id,purchase_unit_label,purchase_unit_qty');
+   if(!ingPurR.error&&ingPurR.data){
+    const map={};ingPurR.data.forEach(x=>{map[x.id]={label:x.purchase_unit_label,qty:x.purchase_unit_qty}});
+    db.ingredients.forEach(m=>{if(map[m.id]){m.purchaseUnitLabel=map[m.id].label||'';m.purchaseUnitQty=Number(map[m.id].qty)||0}});
+   }
+  }catch(e){}
+  try{
    // Busca a receita de cada produto à parte: se a tabela
    // "product_recipe_items" ainda não estiver com as colunas certas, essa
    // consulta falha sozinha sem apagar a receita que já está aqui.
@@ -842,16 +851,21 @@ async function syncCashClosingsToSupabase(){
 async function syncIngredientsToSupabase(){
  if(__snapEquals('ingredients',db.ingredients))return;
  try{
-  const rows=db.ingredients.map(m=>({id:m.id,name:m.name,unit:m.unit,stock:m.stock,cost:m.cost,active:m.active!==false,low_stock_threshold:m.lowStockThreshold||null,section:m.section||null}));
+  const rows=db.ingredients.map(m=>({id:m.id,name:m.name,unit:m.unit,stock:m.stock,cost:m.cost,active:m.active!==false,low_stock_threshold:m.lowStockThreshold||null,section:m.section||null,purchase_unit_label:m.purchaseUnitLabel||null,purchase_unit_qty:m.purchaseUnitQty||null}));
   try{
    await __upsertAndPrune('ingredients',rows);
   }catch(e){
-   // A coluna "low_stock_threshold" ou "section" pode não existir ainda —
-   // tenta de novo sem elas.
+   // Alguma das colunas "low_stock_threshold", "section",
+   // "purchase_unit_label" ou "purchase_unit_qty" pode não existir ainda —
+   // tenta de novo removendo-as em cascata.
    try{
-    await __upsertAndPrune('ingredients',rows.map(({low_stock_threshold,...r})=>r));
+    await __upsertAndPrune('ingredients',rows.map(({purchase_unit_label,purchase_unit_qty,...r})=>r));
    }catch(e2){
-    await __upsertAndPrune('ingredients',rows.map(({low_stock_threshold,section,...r})=>r));
+    try{
+     await __upsertAndPrune('ingredients',rows.map(({purchase_unit_label,purchase_unit_qty,low_stock_threshold,...r})=>r));
+    }catch(e3){
+     await __upsertAndPrune('ingredients',rows.map(({purchase_unit_label,purchase_unit_qty,low_stock_threshold,section,...r})=>r));
+    }
    }
   }
   __snapCommit('ingredients',db.ingredients);
@@ -1476,7 +1490,7 @@ function save(){
  scheduleSupabaseSync();
 }
 async function load(){try{db=JSON.parse(localStorage.getItem(KEY))||structuredClone(DEFAULT)}catch(e){db=structuredClone(DEFAULT)}normalize();window.lastSeenOrderCount=db.orders.length;window.menuLoading=(route==='client');render();await loadMenuFromSupabase();normalize();if(window.supabaseMenuLoaded)__seedSyncSnapshot();window.menuLoading=false;render();startSupabaseRealtime()}
-function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.cancelamento??=DEFAULT.settings.messages.cancelamento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.settings.loyalty??={active:false,every:10,creditValue:20};db.categories??=structuredClone(DEFAULT.categories);db.categories.forEach(c=>{c.active=c.active!==false;c.upsell=!!c.upsell});db.products??=[];db.packageTypes??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.riders.forEach(r=>{r.active=r.active!==false;r.createdAt=r.createdAt||new Date().toISOString();r.dailyRate=Number(r.dailyRate)||0});db.employees??=[];db.employees.forEach(e=>{e.active=e.active!==false;e.createdAt=e.createdAt||new Date().toISOString();e.dailyRate=Number(e.dailyRate)||0;e.role=e.role||'';e.phone=e.phone||''});db.orders??=[];db.ingredients??=[];db.materiaSections??=[{id:uuidLike(),name:'Embalagens'},{id:uuidLike(),name:'Hortifruti'},{id:uuidLike(),name:'Molhos'},{id:uuidLike(),name:'Carnes'}];db.cash??={open:false,initial:0,movements:[]};db.cash.initialMethod=db.cash.initialMethod||'cash';db.cashClosings??=[];db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.photos=(p.photos&&p.photos.length)?p.photos:(p.photo?[p.photo]:[]);p.photo=p.photos[0]||null;p.type=p.type==='pi'?'pi':'pa';p.packageType=p.packageType||'';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{id:r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{id:r&&r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true;m.section=m.section||''});db.ingredients.forEach(m=>{if(!isUuidLike(m.id)){const oldId=m.id,newId=uuidLike();m.id=newId;db.products.forEach(p=>{(p.recipe||[]).forEach(r=>{if(r.kind!=='pi'&&r.ingredientId===oldId)r.ingredientId=newId})})}});db.packageTypes.forEach(t=>{if(!isUuidLike(t.id)){const oldId=t.id,newId=uuidLike();t.id=newId;db.products.forEach(p=>{if(p.packageType===oldId)p.packageType=newId})}});db.payments.forEach(p=>{p.showClient??=true;p.fee=Number(p.fee)||0;p.feeFixed=Number(p.feeFixed)||0});db.coupons??=[];db.coupons.forEach(c=>{c.code=String(c.code||'').toUpperCase();c.type=c.type==='fixed'?'fixed':'percent';c.value=Number(c.value)||0;c.active??=true;c.usedCount=Number(c.usedCount)||0;c.maxUses=c.maxUses?Number(c.maxUses):null});db.hourExceptions??=[];
+function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.cancelamento??=DEFAULT.settings.messages.cancelamento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.settings.loyalty??={active:false,every:10,creditValue:20};db.categories??=structuredClone(DEFAULT.categories);db.categories.forEach(c=>{c.active=c.active!==false;c.upsell=!!c.upsell});db.products??=[];db.packageTypes??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.riders.forEach(r=>{r.active=r.active!==false;r.createdAt=r.createdAt||new Date().toISOString();r.dailyRate=Number(r.dailyRate)||0});db.employees??=[];db.employees.forEach(e=>{e.active=e.active!==false;e.createdAt=e.createdAt||new Date().toISOString();e.dailyRate=Number(e.dailyRate)||0;e.role=e.role||'';e.phone=e.phone||''});db.orders??=[];db.ingredients??=[];db.materiaSections??=[{id:uuidLike(),name:'Embalagens'},{id:uuidLike(),name:'Hortifruti'},{id:uuidLike(),name:'Molhos'},{id:uuidLike(),name:'Carnes'}];db.cash??={open:false,initial:0,movements:[]};db.cash.initialMethod=db.cash.initialMethod||'cash';db.cashClosings??=[];db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.photos=(p.photos&&p.photos.length)?p.photos:(p.photo?[p.photo]:[]);p.photo=p.photos[0]||null;p.type=p.type==='pi'?'pi':'pa';p.packageType=p.packageType||'';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{id:r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{id:r&&r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true;m.section=m.section||'';m.purchaseUnitLabel=m.purchaseUnitLabel||'';m.purchaseUnitQty=Number(m.purchaseUnitQty)||0});db.ingredients.forEach(m=>{if(!isUuidLike(m.id)){const oldId=m.id,newId=uuidLike();m.id=newId;db.products.forEach(p=>{(p.recipe||[]).forEach(r=>{if(r.kind!=='pi'&&r.ingredientId===oldId)r.ingredientId=newId})})}});db.packageTypes.forEach(t=>{if(!isUuidLike(t.id)){const oldId=t.id,newId=uuidLike();t.id=newId;db.products.forEach(p=>{if(p.packageType===oldId)p.packageType=newId})}});db.payments.forEach(p=>{p.showClient??=true;p.fee=Number(p.fee)||0;p.feeFixed=Number(p.feeFixed)||0});db.coupons??=[];db.coupons.forEach(c=>{c.code=String(c.code||'').toUpperCase();c.type=c.type==='fixed'?'fixed':'percent';c.value=Number(c.value)||0;c.active??=true;c.usedCount=Number(c.usedCount)||0;c.maxUses=c.maxUses?Number(c.maxUses):null});db.hourExceptions??=[];
  db.customerSeq??=0;
  db.customers.forEach(c=>{
   c.addresses??=[];
@@ -2640,8 +2654,16 @@ function findStockItem(type,itemId){
 }
 function stockItemStock(type,item){return type==='produto'?getProductStock(item):getIngredientAvailable(item.id)}
 function stockItemUnit(type,item){return type==='produto'?'un':(item.unit||'')}
+function updateStockEntradaPkgPreview(){
+ const qtyEl=document.getElementById('stockEntradaPkgQty'),sizeEl=document.getElementById('stockEntradaPkgSize'),totalEl=document.getElementById('stockEntradaPkgTotal'),preview=document.getElementById('stockEntradaPkgPreview');
+ if(!qtyEl||!sizeEl||!totalEl||!preview)return;
+ const qty=Number(qtyEl.value||0),size=Number(sizeEl.value||0),total=parseFloat(String(totalEl.value||'0').replace(',','.'))||0;
+ const units=qty*size;
+ if(units>0&&total>0){preview.textContent=`= ${units} ${preview.dataset.unit||''} · custo por unidade: ${money(total/units)}`}
+ else{preview.textContent='Preencha os campos acima para ver o total de unidades e o custo por unidade.'}
+}
 function itemDraftFor(kind){
- if(kind==='entrada'){window.stockEntradaDraft=window.stockEntradaDraft||{itemType:'',itemId:'',itemSearch:'',qty:1,unitPrice:'',open:false,note:'',nfNumber:'',supplierId:'',supplierSearch:'',supplierOpen:false,manual:false,manualNote:'',paymentCondition:'',paymentMethod:'',paymentDueDate:'',items:[]};return window.stockEntradaDraft}
+ if(kind==='entrada'){window.stockEntradaDraft=window.stockEntradaDraft||{itemType:'',itemId:'',itemSearch:'',qty:1,unitPrice:'',open:false,note:'',nfNumber:'',supplierId:'',supplierSearch:'',supplierOpen:false,manual:false,manualNote:'',paymentCondition:'',paymentMethod:'',paymentDueDate:'',items:[],byPackage:false,pkgQty:1,pkgSize:'',pkgTotal:''};return window.stockEntradaDraft}
  if(kind==='mov'){window.movItemDraft=window.movItemDraft||{itemType:'',itemId:'',itemSearch:'',open:false};return window.movItemDraft}
  if(kind==='contagem'){window.contagemDraft=window.contagemDraft||{itemType:'',itemId:'',itemSearch:'',qty:'',open:false};return window.contagemDraft}
  window.stockSaidaDraft=window.stockSaidaDraft||{itemType:'',itemId:'',itemSearch:'',qty:1,note:'',reason:'Falta',open:false};return window.stockSaidaDraft;
@@ -2712,6 +2734,10 @@ function bindItemPickerResults(){
   const item=findStockItem(type,iid);if(!item)return;
   const d=itemDraftFor(kind);
   d.itemType=type;d.itemId=item.id;d.itemSearch=item.name;d.open=false;
+  if(kind==='entrada'){
+   if(type==='materia'&&item.purchaseUnitQty>0){d.byPackage=true;d.pkgSize=item.purchaseUnitQty;d.pkgQty=1;d.pkgTotal=''}
+   else{d.byPackage=false}
+  }
   formErr='';render();
  });
  document.querySelectorAll('[data-item-clear]').forEach(b=>b.onclick=()=>{
@@ -2754,11 +2780,17 @@ function renderEstoqueEntradas(){
   ${itemPickerResultsHtml('entrada')}
  </div>
  <div id="stockPickerBelow_entrada">${itemPickerBelowHtml('entrada')}</div>
- <div class="formgrid" style="margin-top:10px">
+ ${pendingItem?`<label class="chip ${d.byPackage?'active':''}" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer;margin-top:10px"><input type="checkbox" id="stockEntradaByPackage" ${d.byPackage?'checked':''} style="width:auto;margin:0"> Lançar por caixa/pacote (a nota traz o valor da embalagem, não da unidade)</label>`:''}
+ ${(pendingItem&&d.byPackage)?`<div class="formgrid" style="margin-top:10px">
+  <div class="field"><label>${pendingItem.purchaseUnitLabel?esc(pendingItem.purchaseUnitLabel):'Embalagens'} compradas</label><input autocomplete="off" id="stockEntradaPkgQty" type="number" min="0.01" step="0.01" value="${d.pkgQty||1}"></div>
+  <div class="field"><label>Unidades (${esc(stockItemUnit(d.itemType,pendingItem))}) por ${pendingItem.purchaseUnitLabel?esc(pendingItem.purchaseUnitLabel):'embalagem'}</label><input autocomplete="off" id="stockEntradaPkgSize" type="number" min="0.01" step="0.01" value="${d.pkgSize||''}" placeholder="Ex.: 2500"></div>
+ </div>
+ <div class="field"><label>Valor total pago nessa embalagem (R$)</label><input autocomplete="off" id="stockEntradaPkgTotal" type="text" inputmode="decimal" value="${d.pkgTotal?String(d.pkgTotal).replace('.',','):''}" placeholder="0,00"></div>
+ <div class="meta" id="stockEntradaPkgPreview" data-unit="${esc(stockItemUnit(d.itemType,pendingItem))}">Preencha os campos acima para ver o total de unidades e o custo por unidade.</div>`:`<div class="formgrid" style="margin-top:10px">
   <div class="field"><label>Quantidade${pendingItem?' ('+esc(stockItemUnit(d.itemType,pendingItem))+')':''}</label><input autocomplete="off" id="stockEntradaQty" type="number" min="0.01" step="0.01" value="${esc(d.qty||1)}"></div>
   <div class="field"><label>Valor unitário (R$)</label><input autocomplete="off" id="stockEntradaUnitPrice" type="text" inputmode="decimal" value="${d.unitPrice?String(d.unitPrice).replace('.',','):''}" placeholder="Ex.: 54 ou 0,054"></div>
  </div>
- <p class="meta" style="margin-top:-4px">💡 Se o item for uma matéria-prima com estoque em gramas ou ml, informe o valor pela MESMA unidade (ex.: quilo a R$ 54,00 → 0,054 por grama). Aceita várias casas decimais.</p>
+ <p class="meta" style="margin-top:-4px">💡 Se o item for uma matéria-prima com estoque em gramas ou ml, informe o valor pela MESMA unidade (ex.: quilo a R$ 54,00 → 0,054 por grama). Aceita várias casas decimais.</p>`}
  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  <button type="button" class="btn" id="addStockEntradaItem" style="margin-top:10px">➕ Adicionar item à nota</button>
  </div>
@@ -3482,6 +3514,11 @@ function renderMateriaDialog(){
  <div class="field"><label>Seção (opcional)</label><select id="dialogMatSection"><option value="">Sem seção</option>${(db.materiaSections||[]).map(t=>`<option value="${t.id}" ${t.id===d.section?'selected':''}>${esc(t.name)}</option>`).join('')}<option value="__new__">+ Cadastrar nova seção</option></select><p class="meta" style="margin-top:6px">Use para agrupar itens parecidos, ex.: Embalagens, Hortifruti, Molhos, Carnes.</p></div>
  <div class="field"><label>Unidade de medida</label><select id="dialogMatUnit"><option value="">Selecione</option>${materiaUnitOptionsHtml(d.unit||'')}</select></div>
  <div class="grid2">
+  <div class="field"><label>Unidade de compra (opcional)</label><input autocomplete="off" id="dialogMatPurchaseLabel" value="${esc(d.purchaseUnitLabel||'')}" placeholder="Ex.: Caixa, Pacote, Fardo"></div>
+  <div class="field"><label>Quantidade por unidade de compra</label><input autocomplete="off" id="dialogMatPurchaseQty" type="number" min="0" step="0.01" value="${d.purchaseUnitQty||''}" placeholder="Ex.: 2500"></div>
+ </div>
+ <p class="meta" style="margin-top:-6px;margin-bottom:11px">💡 Preencha se você costuma comprar este item em caixa/pacote e a nota traz o valor total da embalagem, não da unidade — ex.: "Caixa" com 2500 unidades. Isso habilita a conversão automática na tela de Entrada de estoque.</p>
+ <div class="grid2">
   <div class="field"><label>Estoque atual</label><input autocomplete="off" id="dialogMatStock" type="number" value="${d.stock||''}" placeholder="0"></div>
   <div class="field"><label>Avisar quando o estoque ficar menor ou igual a (opcional)</label><input autocomplete="off" id="dialogMatLowStock" type="number" min="0" value="${d.lowStockThreshold||''}" placeholder="Ex.: 2000"></div>
   <div class="field"><label>Custo por unidade</label><input autocomplete="off" id="dialogMatCost" type="text" inputmode="decimal" value="${d.cost?String(d.cost).replace('.',','):''}" placeholder="Ex.: 54 (por kg) ou 0,054 (por g)"><p class="meta" style="margin-top:6px">Use o preço pela MESMA unidade escolhida acima. Ex.: se a unidade é "g" e o quilo custa R$ 54,00, o custo por grama é 0,054 — pode digitar com 3 ou 4 casas decimais.</p></div>
@@ -4093,19 +4130,35 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
   const below=document.getElementById('stockPickerBelow_entrada');if(below)below.innerHTML=itemPickerBelowHtml('entrada');
   bindItemPickerResults();
  });
+ document.getElementById('stockEntradaByPackage')?.addEventListener('change',e=>{const d=itemDraftFor('entrada');d.byPackage=e.target.checked;render()});
+ document.getElementById('stockEntradaPkgQty')?.addEventListener('input',e=>{itemDraftFor('entrada').pkgQty=e.target.value;updateStockEntradaPkgPreview()});
+ document.getElementById('stockEntradaPkgSize')?.addEventListener('input',e=>{itemDraftFor('entrada').pkgSize=e.target.value;updateStockEntradaPkgPreview()});
+ document.getElementById('stockEntradaPkgTotal')?.addEventListener('input',e=>{itemDraftFor('entrada').pkgTotal=e.target.value;updateStockEntradaPkgPreview()});
  document.getElementById('addStockEntradaItem')?.addEventListener('click',()=>{
   const d=itemDraftFor('entrada');
   const item=findStockItem(d.itemType,d.itemId);
-  const qtyRaw=Number(document.getElementById('stockEntradaQty')?.value||0);
-  const qty=d.itemType==='produto'?Math.max(0,Math.round(qtyRaw)):qtyRaw;
-  const unitPrice=Math.max(0,parseFloat(String(document.getElementById('stockEntradaUnitPrice')?.value||'0').replace(',','.'))||0);
   if(!item){formErr='Selecione um produto ou matéria-prima da lista.';render();return}
+  let qty,unitPrice;
+  if(d.byPackage){
+   const pkgQty=Number(document.getElementById('stockEntradaPkgQty')?.value||0);
+   const pkgSize=Number(document.getElementById('stockEntradaPkgSize')?.value||0);
+   const pkgTotal=parseFloat(String(document.getElementById('stockEntradaPkgTotal')?.value||'0').replace(',','.'))||0;
+   if(!(pkgQty>0)||!(pkgSize>0)){formErr='Informe quantas embalagens foram compradas e quantas unidades vêm em cada uma.';render();return}
+   if(!(pkgTotal>0)){formErr='Informe o valor total pago por essa embalagem.';render();return}
+   const rawQty=pkgQty*pkgSize;
+   qty=d.itemType==='produto'?Math.max(0,Math.round(rawQty)):rawQty;
+   unitPrice=pkgTotal/rawQty;
+  }else{
+   const qtyRaw=Number(document.getElementById('stockEntradaQty')?.value||0);
+   qty=d.itemType==='produto'?Math.max(0,Math.round(qtyRaw)):qtyRaw;
+   unitPrice=Math.max(0,parseFloat(String(document.getElementById('stockEntradaUnitPrice')?.value||'0').replace(',','.'))||0);
+  }
   if(!(qty>0)){formErr='Informe uma quantidade válida.';render();return}
   const unit=stockItemUnit(d.itemType,item);
   const existing=d.items.find(x=>x.itemType===d.itemType&&x.itemId===item.id);
   if(existing){existing.qty=(Number(existing.qty)||0)+qty;existing.unitPrice=unitPrice}
   else{d.items.push({itemType:d.itemType,itemId:item.id,name:item.name,unit,qty,unitPrice})}
-  d.itemType='';d.itemId='';d.itemSearch='';d.open=false;d.qty=1;d.unitPrice='';
+  d.itemType='';d.itemId='';d.itemSearch='';d.open=false;d.qty=1;d.unitPrice='';d.byPackage=false;d.pkgQty=1;d.pkgSize='';d.pkgTotal='';
   formErr='';save();render();
  });
  document.querySelectorAll('[data-cart-remove]').forEach(b=>b.onclick=()=>{
@@ -4395,8 +4448,8 @@ document.getElementById('deleteAddonDialog')?.addEventListener('click',()=>{if(!
  document.getElementById('deleteSupplierDialog')?.addEventListener('click',()=>{if(!window.editingSupplier)return;if(!confirm('Excluir este fornecedor?'))return;db.suppliers=db.suppliers.filter(x=>x.id!==window.editingSupplier);window.editingSupplier=null;window.supplierDraft={};overlay=null;save();render()});
  document.getElementById('newMateriaBtn')?.addEventListener('click',()=>{window.editingMateria=null;window.materiaDraft={};formErr='';overlay='materiaDialog';render()});
  document.getElementById('dialogMatSection')?.addEventListener('change',e=>handleMateriaSectionSelect(e.target));
- document.querySelectorAll('[data-clickmateria]').forEach(e=>e.onclick=()=>{let mid=e.dataset.clickmateria;let m=db.ingredients.find(x=>x.id===mid);if(!m)return;window.editingMateria=mid;window.materiaDraft={name:m.name,unit:m.unit,stock:m.stock,cost:m.cost,section:m.section||''};formErr='';overlay='materiaDialog';render()});
- document.getElementById('saveMateriaDialog')?.addEventListener('click',()=>{let n=document.getElementById('dialogMatName').value.trim(),unit=document.getElementById('dialogMatUnit').value.trim(),section=document.getElementById('dialogMatSection')?.value||'',stockRaw=document.getElementById('dialogMatStock').value,costRaw=document.getElementById('dialogMatCost').value,stock=Math.max(0,Number(stockRaw||0)),cost=Math.max(0,parseFloat(String(costRaw||'0').replace(',','.'))||0),lowStock=Math.max(0,Number(document.getElementById('dialogMatLowStock')?.value||0))||null;window.materiaDraft={name:n,unit,section,stock:stockRaw,cost:costRaw,lowStockThreshold:lowStock};if(!n||!unit){formErr='Informe nome e unidade de medida.';render();return}if(window.editingMateria){let m=db.ingredients.find(x=>x.id===window.editingMateria);if(!m)return;m.name=n;m.unit=unit;m.section=section;m.stock=stock;m.cost=cost;m.lowStockThreshold=lowStock;window.editingMateria=null}else{db.ingredients.push({id:uuidLike(),name:n,unit,section,stock,cost,active:true,lowStockThreshold:lowStock})}window.materiaDraft={};formErr='';overlay=null;save();render()});
+ document.querySelectorAll('[data-clickmateria]').forEach(e=>e.onclick=()=>{let mid=e.dataset.clickmateria;let m=db.ingredients.find(x=>x.id===mid);if(!m)return;window.editingMateria=mid;window.materiaDraft={name:m.name,unit:m.unit,stock:m.stock,cost:m.cost,section:m.section||'',purchaseUnitLabel:m.purchaseUnitLabel||'',purchaseUnitQty:m.purchaseUnitQty||''};formErr='';overlay='materiaDialog';render()});
+ document.getElementById('saveMateriaDialog')?.addEventListener('click',()=>{let n=document.getElementById('dialogMatName').value.trim(),unit=document.getElementById('dialogMatUnit').value.trim(),section=document.getElementById('dialogMatSection')?.value||'',purchaseUnitLabel=document.getElementById('dialogMatPurchaseLabel')?.value.trim()||'',purchaseUnitQty=Math.max(0,Number(document.getElementById('dialogMatPurchaseQty')?.value||0))||0,stockRaw=document.getElementById('dialogMatStock').value,costRaw=document.getElementById('dialogMatCost').value,stock=Math.max(0,Number(stockRaw||0)),cost=Math.max(0,parseFloat(String(costRaw||'0').replace(',','.'))||0),lowStock=Math.max(0,Number(document.getElementById('dialogMatLowStock')?.value||0))||null;window.materiaDraft={name:n,unit,section,purchaseUnitLabel,purchaseUnitQty,stock:stockRaw,cost:costRaw,lowStockThreshold:lowStock};if(!n||!unit){formErr='Informe nome e unidade de medida.';render();return}if(window.editingMateria){let m=db.ingredients.find(x=>x.id===window.editingMateria);if(!m)return;m.name=n;m.unit=unit;m.section=section;m.purchaseUnitLabel=purchaseUnitLabel;m.purchaseUnitQty=purchaseUnitQty;m.stock=stock;m.cost=cost;m.lowStockThreshold=lowStock;window.editingMateria=null}else{db.ingredients.push({id:uuidLike(),name:n,unit,section,purchaseUnitLabel,purchaseUnitQty,stock,cost,active:true,lowStockThreshold:lowStock})}window.materiaDraft={};formErr='';overlay=null;save();render()});
  document.getElementById('deleteMateriaDialog')?.addEventListener('click',()=>{if(!window.editingMateria)return;let mid=window.editingMateria;if(!confirm('Excluir esta matéria-prima? Receitas que a usam também serão afetadas.'))return;db.ingredients=db.ingredients.filter(x=>x.id!==mid);db.products.forEach(p=>{p.recipe=(p.recipe||[]).filter(r=>r.ingredientId!==mid)});window.editingMateria=null;window.materiaDraft={};overlay=null;save();render()});
  document.querySelectorAll('[data-editrecipe]').forEach(e=>e.onclick=(ev)=>{if(ev.target.closest('button'))return;let pid=e.dataset.editrecipe;let p=db.products.find(x=>x.id===pid);if(!p)return;window.editingProduct=pid;window.recipeForProduct=pid;overlay='editProduct';render()});
  document.querySelectorAll('[data-addrecipe]').forEach(e=>e.onclick=(ev)=>{ev.stopPropagation();let pid=e.dataset.addrecipe;let p=db.products.find(x=>x.id===pid);if(!p)return;if(!p.recipe)p.recipe=[];window.editingProduct=pid;window.recipeForProduct=pid;window.editingRecipeIdx=null;window.recipeDraftKind=null;overlay='recipeDialog';save();render()});
