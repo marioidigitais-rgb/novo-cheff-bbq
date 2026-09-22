@@ -514,7 +514,7 @@ async function loadMenuFromSupabase(){
   try{
    const cashR=await sb.from('cash_register').select('*').eq('id',1).maybeSingle();
    if(!cashR.error&&cashR.data){
-    db.cash={open:!!cashR.data.open,initial:Number(cashR.data.initial)||0,movements:(()=>{try{return JSON.parse(cashR.data.movements||'[]')}catch(e){return db.cash.movements||[]}})()};
+    db.cash={open:!!cashR.data.open,initial:Number(cashR.data.initial)||0,initialMethod:cashR.data.initial_method||'cash',movements:(()=>{try{return JSON.parse(cashR.data.movements||'[]')}catch(e){return db.cash.movements||[]}})()};
    }
   }catch(e){}
   const hoursObj={};(hoursR.data||[]).forEach(h=>{hoursObj[h.weekday]={open:(h.open_time||'').slice(0,5),close:(h.close_time||'').slice(0,5),active:h.active}});
@@ -988,9 +988,16 @@ async function syncHourExceptionsToSupabase(){
 async function syncCashToSupabase(){
  if(__snapEquals('cash',db.cash))return;
  try{
-  const row={id:1,open:!!db.cash.open,initial:Number(db.cash.initial)||0,movements:JSON.stringify(db.cash.movements||[])};
-  const r=await sb.from('cash_register').upsert(row);
-  if(r.error)throw r.error;
+  const row={id:1,open:!!db.cash.open,initial:Number(db.cash.initial)||0,initial_method:db.cash.initialMethod||'cash',movements:JSON.stringify(db.cash.movements||[])};
+  try{
+   const r=await sb.from('cash_register').upsert(row);
+   if(r.error)throw r.error;
+  }catch(e){
+   // A coluna "initial_method" pode não existir ainda — tenta de novo sem ela.
+   const {initial_method,...rowNoMethod}=row;
+   const r2=await sb.from('cash_register').upsert(rowNoMethod);
+   if(r2.error)throw r2.error;
+  }
   __snapCommit('cash',db.cash);
  }catch(e){
   console.error('Não foi possível sincronizar o status do caixa com o Supabase:',e);
@@ -1048,7 +1055,7 @@ async function syncMissingMovementsFromSupabase(){
   try{
    const cashR=await sb.from('cash_register').select('*').eq('id',1).maybeSingle();
    if(!cashR.error&&cashR.data){
-    db.cash={open:!!cashR.data.open,initial:Number(cashR.data.initial)||0,movements:(()=>{try{return JSON.parse(cashR.data.movements||'[]')}catch(e){return db.cash.movements||[]}})()};
+    db.cash={open:!!cashR.data.open,initial:Number(cashR.data.initial)||0,initialMethod:cashR.data.initial_method||'cash',movements:(()=>{try{return JSON.parse(cashR.data.movements||'[]')}catch(e){return db.cash.movements||[]}})()};
     __snapCommit('cash',db.cash);
    }
   }catch(e){}
@@ -1445,7 +1452,7 @@ function save(){
  scheduleSupabaseSync();
 }
 async function load(){try{db=JSON.parse(localStorage.getItem(KEY))||structuredClone(DEFAULT)}catch(e){db=structuredClone(DEFAULT)}normalize();window.lastSeenOrderCount=db.orders.length;window.menuLoading=(route==='client');render();await loadMenuFromSupabase();normalize();if(window.supabaseMenuLoaded)__seedSyncSnapshot();window.menuLoading=false;render();startSupabaseRealtime()}
-function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.cancelamento??=DEFAULT.settings.messages.cancelamento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.settings.loyalty??={active:false,every:10,creditValue:20};db.categories??=structuredClone(DEFAULT.categories);db.categories.forEach(c=>{c.active=c.active!==false;c.upsell=!!c.upsell});db.products??=[];db.packageTypes??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.riders.forEach(r=>{r.active=r.active!==false;r.createdAt=r.createdAt||new Date().toISOString();r.dailyRate=Number(r.dailyRate)||0});db.employees??=[];db.employees.forEach(e=>{e.active=e.active!==false;e.createdAt=e.createdAt||new Date().toISOString();e.dailyRate=Number(e.dailyRate)||0;e.role=e.role||'';e.phone=e.phone||''});db.orders??=[];db.ingredients??=[];db.materiaSections??=[{id:uuidLike(),name:'Embalagens'},{id:uuidLike(),name:'Hortifruti'},{id:uuidLike(),name:'Molhos'},{id:uuidLike(),name:'Carnes'}];db.cash??={open:false,initial:0,movements:[]};db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.photos=(p.photos&&p.photos.length)?p.photos:(p.photo?[p.photo]:[]);p.photo=p.photos[0]||null;p.type=p.type==='pi'?'pi':'pa';p.packageType=p.packageType||'';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{id:r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{id:r&&r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true;m.section=m.section||''});db.ingredients.forEach(m=>{if(!isUuidLike(m.id)){const oldId=m.id,newId=uuidLike();m.id=newId;db.products.forEach(p=>{(p.recipe||[]).forEach(r=>{if(r.kind!=='pi'&&r.ingredientId===oldId)r.ingredientId=newId})})}});db.packageTypes.forEach(t=>{if(!isUuidLike(t.id)){const oldId=t.id,newId=uuidLike();t.id=newId;db.products.forEach(p=>{if(p.packageType===oldId)p.packageType=newId})}});db.payments.forEach(p=>{p.showClient??=true;p.fee=Number(p.fee)||0;p.feeFixed=Number(p.feeFixed)||0});db.coupons??=[];db.coupons.forEach(c=>{c.code=String(c.code||'').toUpperCase();c.type=c.type==='fixed'?'fixed':'percent';c.value=Number(c.value)||0;c.active??=true;c.usedCount=Number(c.usedCount)||0;c.maxUses=c.maxUses?Number(c.maxUses):null});db.hourExceptions??=[];
+function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.cancelamento??=DEFAULT.settings.messages.cancelamento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.settings.loyalty??={active:false,every:10,creditValue:20};db.categories??=structuredClone(DEFAULT.categories);db.categories.forEach(c=>{c.active=c.active!==false;c.upsell=!!c.upsell});db.products??=[];db.packageTypes??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.riders.forEach(r=>{r.active=r.active!==false;r.createdAt=r.createdAt||new Date().toISOString();r.dailyRate=Number(r.dailyRate)||0});db.employees??=[];db.employees.forEach(e=>{e.active=e.active!==false;e.createdAt=e.createdAt||new Date().toISOString();e.dailyRate=Number(e.dailyRate)||0;e.role=e.role||'';e.phone=e.phone||''});db.orders??=[];db.ingredients??=[];db.materiaSections??=[{id:uuidLike(),name:'Embalagens'},{id:uuidLike(),name:'Hortifruti'},{id:uuidLike(),name:'Molhos'},{id:uuidLike(),name:'Carnes'}];db.cash??={open:false,initial:0,movements:[]};db.cash.initialMethod=db.cash.initialMethod||'cash';db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.photos=(p.photos&&p.photos.length)?p.photos:(p.photo?[p.photo]:[]);p.photo=p.photos[0]||null;p.type=p.type==='pi'?'pi':'pa';p.packageType=p.packageType||'';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{id:r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{id:r&&r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true;m.section=m.section||''});db.ingredients.forEach(m=>{if(!isUuidLike(m.id)){const oldId=m.id,newId=uuidLike();m.id=newId;db.products.forEach(p=>{(p.recipe||[]).forEach(r=>{if(r.kind!=='pi'&&r.ingredientId===oldId)r.ingredientId=newId})})}});db.packageTypes.forEach(t=>{if(!isUuidLike(t.id)){const oldId=t.id,newId=uuidLike();t.id=newId;db.products.forEach(p=>{if(p.packageType===oldId)p.packageType=newId})}});db.payments.forEach(p=>{p.showClient??=true;p.fee=Number(p.fee)||0;p.feeFixed=Number(p.feeFixed)||0});db.coupons??=[];db.coupons.forEach(c=>{c.code=String(c.code||'').toUpperCase();c.type=c.type==='fixed'?'fixed':'percent';c.value=Number(c.value)||0;c.active??=true;c.usedCount=Number(c.usedCount)||0;c.maxUses=c.maxUses?Number(c.maxUses):null});db.hourExceptions??=[];
  db.customerSeq??=0;
  db.customers.forEach(c=>{
   c.addresses??=[];
@@ -2972,6 +2979,9 @@ function moveProductOrder(pid,dir){
 }
 function renderDeliveries(){return `<h2>Entregas</h2>${db.orders.filter(o=>o.customer.delivery==='entrega'&&!['concluido','cancelado'].includes(o.status)).map(o=>`<div class="order"><b>${o.id}</b> · ${esc(o.customer.neighborhoodName)} · ${esc(o.customer.address)}, ${esc(o.customer.number)}<div class="meta">${esc(o.customer.name)}</div><select data-riderorder="${o.id}" style="margin-top:8px;width:100%;padding:8px;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:6px"><option value="">Selecionar entregador</option>${db.riders.filter(r=>r.active!==false||r.id===o.riderId).map(r=>`<option value="${r.id}" ${o.riderId===r.id?'selected':''}>${esc(r.name)}${r.active===false?' (inativo)':''}</option>`).join('')}</select></div>`).join('')||'<div class="empty-state">Nenhuma entrega pendente.</div>'}`}
 function cashMethodName(mid){if(mid==='especie'||mid==='cash')return 'Espécie (Dinheiro)';if(mid==='pix')return 'Pix';return db.payments.find(p=>p.id===mid)?.name||(mid?mid:'—')}
+function activeCashMethods(){return db.payments.filter(pm=>pm.active!==false&&pm.showClient!==false)}
+function cashMethodOptionsHtml(selected){const list=activeCashMethods();if(!list.length)return '<option value="cash">Espécie (Dinheiro)</option><option value="pix">Pix</option>';return list.map(pm=>`<option value="${pm.id}" ${selected===pm.id?'selected':''}>${esc(pm.name)}</option>`).join('')}
+function normCashMethod(mid){return mid==='especie'?'cash':mid}
 function fmtDT(iso){if(!iso)return '—';try{const d=new Date(iso);if(isNaN(d))return '—';return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}catch(e){return '—'}}
 function renderCash(){
  window.caixaView=window.caixaView||'pedidos_abertos';
@@ -3043,7 +3053,7 @@ function renderCashMoveDialog(){
  return `<div class="overlay show"><div class="panel"><div class="head"><h2>${isIn?'Inserir Dinheiro':'Retirar Dinheiro'}</h2><button class="x" id="closeOverlay">×</button></div>
  <div class="field"><label>Valor R$</label><input autocomplete="off" id="cmValue" type="text" inputmode="decimal" placeholder="0,00"></div>
  <div class="field"><label>Motivo</label><input autocomplete="off" id="cmNote" placeholder="${isIn?'Ex.: Reforço de caixa, troco...':'Ex.: Sangria, pagamento a fornecedor...'}"></div>
- <div class="field"><label>Tipo de Pagamento</label><select id="cmMethod"><option value="especie">Espécie (Dinheiro)</option><option value="pix">Pix</option></select></div>
+ <div class="field"><label>Tipo de Pagamento</label><select id="cmMethod">${cashMethodOptionsHtml('cash')}</select></div>
  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  <button class="primary" id="confirmCashMove">${isIn?'Inserir dinheiro':'Retirar dinheiro'}</button>
  <button class="ghost" id="cancelCashMove">Cancelar</button>
@@ -3053,6 +3063,7 @@ function renderCashToggleDialog(){
  if(!db.cash.open){
   return `<div class="overlay show"><div class="panel"><div class="head"><h2>Abrir Caixa</h2><button class="x" id="closeOverlay">×</button></div>
   <div class="field"><label>Valor inicial</label><input autocomplete="off" id="ctInitial" type="text" inputmode="decimal" placeholder="0,00"></div>
+  <div class="field"><label>Forma de pagamento</label><select id="ctMethod">${cashMethodOptionsHtml('cash')}</select></div>
   ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
   <button class="primary" id="confirmCashToggle">Abrir caixa</button>
   <button class="ghost" id="cancelCashToggle">Cancelar</button>
@@ -3064,9 +3075,18 @@ function renderCashToggleDialog(){
  const sIns=sessionMov.filter(m=>m.kind==='entrada').reduce((s,x)=>s+Number(x.value||0),0);
  const sOuts=sessionMov.filter(m=>m.kind==='saida').reduce((s,x)=>s+Number(x.value||0),0);
  const saldo=Number(db.cash.initial||0)+sIns-sOuts;
+ const methods=activeCashMethods();
+ const initialMethod=normCashMethod(db.cash.initialMethod||'cash');
+ const breakdown=methods.map(pm=>{
+  const entradas=sessionMov.filter(m=>normCashMethod(m.method)===pm.id&&m.kind==='entrada').reduce((s,x)=>s+Number(x.value||0),0);
+  const saidas=sessionMov.filter(m=>normCashMethod(m.method)===pm.id&&m.kind==='saida').reduce((s,x)=>s+Number(x.value||0),0);
+  const inicial=pm.id===initialMethod?Number(db.cash.initial||0):0;
+  return {name:pm.name,inicial,entradas,saidas,esperado:inicial+entradas-saidas};
+ });
  return `<div class="overlay show"><div class="panel"><div class="head"><h2>Fechar Caixa</h2><button class="x" id="closeOverlay">×</button></div>
  <div class="meta" style="margin-bottom:10px">Aberto em ${fmtDT(db.cash.openedAt)}</div>
  <div class="metric metric-4"><div><span class="meta">Saldo inicial</span><b>${money(db.cash.initial)}</b></div><div><span class="meta">Entradas</span><b class="pos">${money(sIns)}</b></div><div><span class="meta">Saídas</span><b class="neg">${money(sOuts)}</b></div><div><span class="meta">Saldo final</span><b>${money(saldo)}</b></div></div>
+ <div class="cardbox" style="margin-top:10px"><h3>Conferência por forma de pagamento</h3><div class="stock-table-wrap"><table class="stock-table"><thead><tr><th>Forma</th><th>Inicial</th><th>Entradas</th><th>Saídas</th><th>Esperado</th></tr></thead><tbody>${breakdown.length?breakdown.map(b=>`<tr><td>${esc(b.name)}</td><td>${money(b.inicial)}</td><td class="pos">${money(b.entradas)}</td><td class="neg">${money(b.saidas)}</td><td><b>${money(b.esperado)}</b></td></tr>`).join(''):'<tr><td colspan="5" class="meta">Nenhuma forma de pagamento ativa e visível ao cliente cadastrada.</td></tr>'}</tbody></table></div><p class="meta" style="margin-top:6px">Confira o valor físico (dinheiro na gaveta) ou o extrato (Pix, cartão) de cada forma contra o "Esperado" para identificar sobra ou falta antes de confirmar o fechamento.</p></div>
  <p class="meta" style="margin:10px 0">Confirme para encerrar a sessão de caixa atual.</p>
  <button class="primary danger" id="confirmCashToggle">Confirmar fechamento</button>
  <button class="ghost" id="cancelCashToggle">Cancelar</button>
@@ -3079,7 +3099,7 @@ function renderStaffPayDialog(){
  <div class="field"><label>Tipo</label><select id="spType"><option value="employee" ${d.type==='employee'?'selected':''}>Funcionário</option><option value="rider" ${d.type==='rider'?'selected':''}>Motoboy</option></select></div>
  <div class="field"><label>Pessoa</label><select id="spPerson"><option value="">Selecione</option>${list.map(x=>`<option value="${x.id}" ${d.personId===x.id?'selected':''}>${esc(x.name)}${x.role?' · '+esc(x.role):''}</option>`).join('')}</select>${!list.length?`<div class="meta" style="margin-top:4px">${d.type==='rider'?'Nenhum motoboy ativo cadastrado.':'Nenhum funcionário ativo cadastrado.'}</div>`:''}</div>
  <div class="field"><label>Valor R$</label><input autocomplete="off" id="spValue" type="text" inputmode="decimal" value="${d.value?moneyMaskFormat(Number(d.value)):''}" placeholder="0,00"></div>
- <div class="field"><label>Forma de pagamento</label><select id="spMethod"><option value="especie">Espécie (Dinheiro)</option><option value="pix">Pix</option></select></div>
+ <div class="field"><label>Forma de pagamento</label><select id="spMethod">${cashMethodOptionsHtml('cash')}</select></div>
  <div class="field"><label>Observação (opcional)</label><input autocomplete="off" id="spNote" value="${esc(d.note||'')}" placeholder="Ex.: turno de sábado"></div>
  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
  <button class="primary" id="confirmStaffPay">Registrar pagamento</button>
@@ -4230,7 +4250,7 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  document.getElementById('confirmCashToggle')?.addEventListener('click',()=>{
   if(!db.cash.open){
    const v=moneyMaskParse(ctInitial.value);
-   db.cash.movements=db.cash.movements||[];db.cash.open=true;db.cash.initial=v;db.cash.openedAt=new Date().toISOString();db.cash.closedAt=null;
+   db.cash.movements=db.cash.movements||[];db.cash.open=true;db.cash.initial=v;db.cash.initialMethod=document.getElementById('ctMethod')?.value||'cash';db.cash.openedAt=new Date().toISOString();db.cash.closedAt=null;
    formErr='';overlay=null;save();render();
   }else{
    db.cash.open=false;db.cash.closedAt=new Date().toISOString();
