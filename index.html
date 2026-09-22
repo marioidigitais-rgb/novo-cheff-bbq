@@ -412,6 +412,15 @@ async function loadMenuFromSupabase(){
    }
   }catch(e){}
   try{
+   // Busca os fechamentos de caixa à parte: se a tabela "cash_closings"
+   // ainda não existir no Supabase, essa consulta falha sozinha sem
+   // derrubar o restante do carregamento.
+   const closingsR=await sb.from('cash_closings').select('id,opened_at,closed_at,initial,initial_method,s_ins,s_outs,saldo,breakdown');
+   if(!closingsR.error&&closingsR.data&&closingsR.data.length){
+    db.cashClosings=closingsR.data.map(c=>({id:c.id,openedAt:c.opened_at,closedAt:c.closed_at,initial:Number(c.initial)||0,initialMethod:c.initial_method||'cash',sIns:Number(c.s_ins)||0,sOuts:Number(c.s_outs)||0,saldo:Number(c.saldo)||0,breakdown:(()=>{try{return JSON.parse(c.breakdown||'[]')}catch(e){return []}})()}));
+   }
+  }catch(e){}
+  try{
    // Busca a classificação de cada produto à parte: se a coluna
    // "package_type" ainda não existir na tabela products do Supabase,
    // essa consulta falha sozinha sem derrubar o restante do carregamento.
@@ -817,6 +826,19 @@ async function syncMateriaSectionsToSupabase(){
   console.error('Não foi possível sincronizar as seções de matéria-prima com o Supabase:',e);
  }
 }
+async function syncCashClosingsToSupabase(){
+ if(__snapEquals('cashClosings',db.cashClosings||[]))return;
+ try{
+  const rows=(db.cashClosings||[]).map(c=>({id:c.id,opened_at:c.openedAt||null,closed_at:c.closedAt||null,initial:Number(c.initial)||0,initial_method:c.initialMethod||'cash',s_ins:Number(c.sIns)||0,s_outs:Number(c.sOuts)||0,saldo:Number(c.saldo)||0,breakdown:JSON.stringify(c.breakdown||[])}));
+  await __upsertAndPrune('cash_closings',rows);
+  __snapCommit('cashClosings',db.cashClosings||[]);
+ }catch(e){
+  // A tabela "cash_closings" pode não existir ainda no Supabase — os
+  // dados continuam salvos neste aparelho e a sincronização é tentada
+  // novamente na próxima alteração, sem travar o restante.
+  console.error('Não foi possível sincronizar os fechamentos de caixa com o Supabase:',e);
+ }
+}
 async function syncIngredientsToSupabase(){
  if(__snapEquals('ingredients',db.ingredients))return;
  try{
@@ -1066,6 +1088,7 @@ async function syncAllToSupabase(){
  await syncCategoriesToSupabase();
  await syncPackageTypesToSupabase();
  await syncMateriaSectionsToSupabase();
+ await syncCashClosingsToSupabase();
  await syncIngredientsToSupabase();
  await syncAddonsToSupabase();
  await syncProductsToSupabase();
@@ -1159,6 +1182,7 @@ function startSupabaseRealtime(){
    .on('postgres_changes',{event:'*',schema:'public',table:'ingredients'},__scheduleRealtimeReload)
    .on('postgres_changes',{event:'*',schema:'public',table:'package_types'},__scheduleRealtimeReload)
    .on('postgres_changes',{event:'*',schema:'public',table:'materia_sections'},__scheduleRealtimeReload)
+   .on('postgres_changes',{event:'*',schema:'public',table:'cash_closings'},__scheduleRealtimeReload)
    .on('postgres_changes',{event:'*',schema:'public',table:'product_recipe_items'},__scheduleRealtimeReload)
    .on('postgres_changes',{event:'*',schema:'public',table:'coupons'},__scheduleRealtimeReload)
    .subscribe();
@@ -1452,7 +1476,7 @@ function save(){
  scheduleSupabaseSync();
 }
 async function load(){try{db=JSON.parse(localStorage.getItem(KEY))||structuredClone(DEFAULT)}catch(e){db=structuredClone(DEFAULT)}normalize();window.lastSeenOrderCount=db.orders.length;window.menuLoading=(route==='client');render();await loadMenuFromSupabase();normalize();if(window.supabaseMenuLoaded)__seedSyncSnapshot();window.menuLoading=false;render();startSupabaseRealtime()}
-function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.cancelamento??=DEFAULT.settings.messages.cancelamento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.settings.loyalty??={active:false,every:10,creditValue:20};db.categories??=structuredClone(DEFAULT.categories);db.categories.forEach(c=>{c.active=c.active!==false;c.upsell=!!c.upsell});db.products??=[];db.packageTypes??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.riders.forEach(r=>{r.active=r.active!==false;r.createdAt=r.createdAt||new Date().toISOString();r.dailyRate=Number(r.dailyRate)||0});db.employees??=[];db.employees.forEach(e=>{e.active=e.active!==false;e.createdAt=e.createdAt||new Date().toISOString();e.dailyRate=Number(e.dailyRate)||0;e.role=e.role||'';e.phone=e.phone||''});db.orders??=[];db.ingredients??=[];db.materiaSections??=[{id:uuidLike(),name:'Embalagens'},{id:uuidLike(),name:'Hortifruti'},{id:uuidLike(),name:'Molhos'},{id:uuidLike(),name:'Carnes'}];db.cash??={open:false,initial:0,movements:[]};db.cash.initialMethod=db.cash.initialMethod||'cash';db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.photos=(p.photos&&p.photos.length)?p.photos:(p.photo?[p.photo]:[]);p.photo=p.photos[0]||null;p.type=p.type==='pi'?'pi':'pa';p.packageType=p.packageType||'';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{id:r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{id:r&&r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true;m.section=m.section||''});db.ingredients.forEach(m=>{if(!isUuidLike(m.id)){const oldId=m.id,newId=uuidLike();m.id=newId;db.products.forEach(p=>{(p.recipe||[]).forEach(r=>{if(r.kind!=='pi'&&r.ingredientId===oldId)r.ingredientId=newId})})}});db.packageTypes.forEach(t=>{if(!isUuidLike(t.id)){const oldId=t.id,newId=uuidLike();t.id=newId;db.products.forEach(p=>{if(p.packageType===oldId)p.packageType=newId})}});db.payments.forEach(p=>{p.showClient??=true;p.fee=Number(p.fee)||0;p.feeFixed=Number(p.feeFixed)||0});db.coupons??=[];db.coupons.forEach(c=>{c.code=String(c.code||'').toUpperCase();c.type=c.type==='fixed'?'fixed':'percent';c.value=Number(c.value)||0;c.active??=true;c.usedCount=Number(c.usedCount)||0;c.maxUses=c.maxUses?Number(c.maxUses):null});db.hourExceptions??=[];
+function normalize(){db.settings??=structuredClone(DEFAULT.settings);db.settings.storeName='Novo Cheff BBQ';db.settings.print??={font:'14px monospace',paper:'80mm',order:'produto,adicionais,cliente,endereco,pagamento,total',estimatedTime:'30 a 45 minutos'};db.settings.print.estimatedTime??='30 a 45 minutos';db.settings.messages??=structuredClone(DEFAULT.settings.messages);db.settings.messages.saudacao??=DEFAULT.settings.messages.saudacao;db.settings.messages.retirada??=DEFAULT.settings.messages.retirada;db.settings.messages.entrega??=DEFAULT.settings.messages.entrega;db.settings.messages.mesa??=DEFAULT.settings.messages.mesa;db.settings.messages.encerramento??=DEFAULT.settings.messages.encerramento;db.settings.messages.cancelamento??=DEFAULT.settings.messages.cancelamento;db.settings.messages.fechado??=DEFAULT.settings.messages.fechado;db.settings.loyalty??={active:false,every:10,creditValue:20};db.categories??=structuredClone(DEFAULT.categories);db.categories.forEach(c=>{c.active=c.active!==false;c.upsell=!!c.upsell});db.products??=[];db.packageTypes??=[];db.addons??=[];db.neighborhoods??=[];db.neighborhoods.forEach(n=>{n.municipio=n.municipio||'';n.active=n.active!==false});db.payments??=structuredClone(DEFAULT.payments);db.hours??=structuredClone(DEFAULT.hours);db.tables??=[];db.riders??=[];db.riders.forEach(r=>{r.active=r.active!==false;r.createdAt=r.createdAt||new Date().toISOString();r.dailyRate=Number(r.dailyRate)||0});db.employees??=[];db.employees.forEach(e=>{e.active=e.active!==false;e.createdAt=e.createdAt||new Date().toISOString();e.dailyRate=Number(e.dailyRate)||0;e.role=e.role||'';e.phone=e.phone||''});db.orders??=[];db.ingredients??=[];db.materiaSections??=[{id:uuidLike(),name:'Embalagens'},{id:uuidLike(),name:'Hortifruti'},{id:uuidLike(),name:'Molhos'},{id:uuidLike(),name:'Carnes'}];db.cash??={open:false,initial:0,movements:[]};db.cash.initialMethod=db.cash.initialMethod||'cash';db.cashClosings??=[];db.customers??=[];db.suppliers??=[];db.suppliers.forEach(s=>{s.desc=s.desc||'';s.cnpj=s.cnpj||'';s.phone=s.phone||'';s.ie=s.ie||'';s.street=s.street||'';s.number=s.number||'';s.neighborhood=s.neighborhood||'';s.cep=s.cep||''});db.stockMovements??=[];db.materiaMovements??=[];db.addons.forEach(a=>{a.min??=0;a.max??=1});db.products.forEach(p=>{p.addons=(p.addons||[]).map(x=>typeof x==='string'?{id:x,max:db.addons.find(y=>y.id===x)?.max||1}:x).filter(x=>x&&x.id&&db.addons.some(a=>a.id===x.id));p.showStock??=false;p.oldPrice=Number(p.oldPrice)||0;p.photos=(p.photos&&p.photos.length)?p.photos:(p.photo?[p.photo]:[]);p.photo=p.photos[0]||null;p.type=p.type==='pi'?'pi':'pa';p.packageType=p.packageType||'';p.recipe=(p.recipe||[]).map(r=>r&&r.kind==='pi'?{id:r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'pi',productId:r.productId,qty:Number(r.qty)||0}:{id:r&&r.id&&isUuidLike(r.id)?r.id:uuidLike(),kind:'materia',ingredientId:r.ingredientId,qty:Number(r&&r.qty)||0})});db.ingredients.forEach(m=>{m.stock=Number(m.stock)||0;m.cost=Number(m.cost)||0;m.active??=true;m.section=m.section||''});db.ingredients.forEach(m=>{if(!isUuidLike(m.id)){const oldId=m.id,newId=uuidLike();m.id=newId;db.products.forEach(p=>{(p.recipe||[]).forEach(r=>{if(r.kind!=='pi'&&r.ingredientId===oldId)r.ingredientId=newId})})}});db.packageTypes.forEach(t=>{if(!isUuidLike(t.id)){const oldId=t.id,newId=uuidLike();t.id=newId;db.products.forEach(p=>{if(p.packageType===oldId)p.packageType=newId})}});db.payments.forEach(p=>{p.showClient??=true;p.fee=Number(p.fee)||0;p.feeFixed=Number(p.feeFixed)||0});db.coupons??=[];db.coupons.forEach(c=>{c.code=String(c.code||'').toUpperCase();c.type=c.type==='fixed'?'fixed':'percent';c.value=Number(c.value)||0;c.active??=true;c.usedCount=Number(c.usedCount)||0;c.maxUses=c.maxUses?Number(c.maxUses):null});db.hourExceptions??=[];
  db.customerSeq??=0;
  db.customers.forEach(c=>{
   c.addresses??=[];
@@ -3000,11 +3024,7 @@ function renderCashHistorico(){
  const sIns=sessionMov.filter(m=>m.kind==='entrada').reduce((s,x)=>s+Number(x.value||0),0);
  const sOuts=sessionMov.filter(m=>m.kind==='saida').reduce((s,x)=>s+Number(x.value||0),0);
  const saldo=Number(db.cash.initial||0)+sIns-sOuts;
- const isEsp=m=>m.method==='especie'||m.method==='cash', isPix=m=>m.method==='pix';
- const espIn=sessionMov.filter(m=>m.kind==='entrada'&&isEsp(m)).reduce((s,x)=>s+Number(x.value||0),0);
- const espOut=sessionMov.filter(m=>m.kind==='saida'&&isEsp(m)).reduce((s,x)=>s+Number(x.value||0),0);
- const pxIn=sessionMov.filter(m=>m.kind==='entrada'&&isPix(m)).reduce((s,x)=>s+Number(x.value||0),0);
- const pxOut=sessionMov.filter(m=>m.kind==='saida'&&isPix(m)).reduce((s,x)=>s+Number(x.value||0),0);
+ const {breakdown:sessionBreakdown}=cashSessionInfo();
  const inRange=m=>{const d=String(m.date).slice(0,10);return (!rf.from||d>=rf.from)&&(!rf.to||d<=rf.to)};
  const filtered=allMov.filter(inRange).sort((a,b)=>new Date(b.date)-new Date(a.date));
  const fIns=filtered.filter(m=>m.kind==='entrada').reduce((s,x)=>s+Number(x.value||0),0);
@@ -3014,8 +3034,8 @@ function renderCashHistorico(){
  ${db.cash.open&&db.cash.openedAt?`<div class="meta" style="margin-bottom:12px">Aberto em ${fmtDT(db.cash.openedAt)}</div>`:(db.cash.closedAt?`<div class="meta" style="margin-bottom:12px">Último fechamento: ${fmtDT(db.cash.closedAt)}</div>`:'<div class="meta" style="margin-bottom:12px">Caixa ainda não foi aberto.</div>')}
  <div class="metric metric-4"><div><span class="meta">Saldo inicial</span><b>${money(db.cash.initial)}</b></div><div><span class="meta">Entradas (sessão)</span><b class="pos">${money(sIns)}</b></div><div><span class="meta">Saídas (sessão)</span><b class="neg">${money(sOuts)}</b></div><div><span class="meta">Saldo atual</span><b>${money(saldo)}</b></div></div>
  ${db.cash.open?`<div class="cardbox cash-breakdown"><h3>Por forma de pagamento (sessão atual)</h3>
- <div class="itemrow"><span>💵 Espécie</span><b>${money(espIn-espOut)}</b></div><div class="meta" style="margin:-4px 0 10px 2px">Entradas ${money(espIn)} · Saídas ${money(espOut)}</div>
- <div class="itemrow"><span>📱 Pix</span><b>${money(pxIn-pxOut)}</b></div><div class="meta" style="margin:-4px 0 2px 2px">Entradas ${money(pxIn)} · Saídas ${money(pxOut)}</div></div>`:''}
+ ${sessionBreakdown.map(b=>`<div class="itemrow"><span>${esc(b.name)}</span><b>${money(b.esperado)}</b></div><div class="meta" style="margin:-4px 0 10px 2px">Entradas ${money(b.entradas)} · Saídas ${money(b.saidas)}</div>`).join('')||'<span class="meta">Nenhuma forma de pagamento ativa e visível ao cliente cadastrada.</span>'}</div>`:''}
+ ${(db.cashClosings&&db.cashClosings.length)?`<div class="cardbox"><h3>Fechamentos anteriores</h3>${db.cashClosings.slice().sort((a,b)=>new Date(b.closedAt)-new Date(a.closedAt)).slice(0,10).map(c=>{const totalDiff=c.breakdown.filter(b=>b.contado!==null&&b.contado!==undefined).reduce((s,b)=>s+(b.diferenca||0),0);const anyCounted=c.breakdown.some(b=>b.contado!==null&&b.contado!==undefined);return `<details class="stock-cat" style="margin-bottom:8px"><summary>${fmtDT(c.closedAt)} · Saldo ${money(c.saldo)}${anyCounted?` · Diferença <span class="${totalDiff===0?'':(totalDiff>0?'pos':'neg')}">${(totalDiff>0?'+':'')+money(totalDiff)}</span>`:' · sem contagem registrada'}</summary><div style="padding:8px 12px 4px">${c.breakdown.map(b=>`<div class="itemrow"><span>${esc(b.name)}</span><span>Esperado ${money(b.esperado)}${b.contado!==null&&b.contado!==undefined?` · Contado ${money(b.contado)} · <b class="${b.diferenca===0?'':(b.diferenca>0?'pos':'neg')}">${(b.diferenca>0?'+':'')+money(b.diferenca)}</b>`:' · não contado'}</span></div>`).join('')}</div></details>`}).join('')}</div>`:''}
  <div class="cardbox">
  <h3>Filtrar período</h3>
  <div class="formgrid"><div class="field"><label>De</label><input id="cashRfFrom" type="date" value="${rf.from}"></div><div class="field"><label>Até</label><input id="cashRfTo" type="date" value="${rf.to}"></div></div>
@@ -3059,16 +3079,7 @@ function renderCashMoveDialog(){
  <button class="ghost" id="cancelCashMove">Cancelar</button>
  </div></div>`;
 }
-function renderCashToggleDialog(){
- if(!db.cash.open){
-  return `<div class="overlay show"><div class="panel"><div class="head"><h2>Abrir Caixa</h2><button class="x" id="closeOverlay">×</button></div>
-  <div class="field"><label>Valor inicial</label><input autocomplete="off" id="ctInitial" type="text" inputmode="decimal" placeholder="0,00"></div>
-  <div class="field"><label>Forma de pagamento</label><select id="ctMethod">${cashMethodOptionsHtml('cash')}</select></div>
-  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
-  <button class="primary" id="confirmCashToggle">Abrir caixa</button>
-  <button class="ghost" id="cancelCashToggle">Cancelar</button>
-  </div></div>`;
- }
+function cashSessionInfo(){
  const today=new Date().toISOString().slice(0,10);
  const allMov=(db.cash.movements||[]).map(m=>({...m,date:m.date||db.cash.openedAt||today}));
  const sessionMov=db.cash.openedAt?allMov.filter(m=>m.date>=db.cash.openedAt):[];
@@ -3081,12 +3092,44 @@ function renderCashToggleDialog(){
   const entradas=sessionMov.filter(m=>normCashMethod(m.method)===pm.id&&m.kind==='entrada').reduce((s,x)=>s+Number(x.value||0),0);
   const saidas=sessionMov.filter(m=>normCashMethod(m.method)===pm.id&&m.kind==='saida').reduce((s,x)=>s+Number(x.value||0),0);
   const inicial=pm.id===initialMethod?Number(db.cash.initial||0):0;
-  return {name:pm.name,inicial,entradas,saidas,esperado:inicial+entradas-saidas};
+  return {id:pm.id,name:pm.name,inicial,entradas,saidas,esperado:inicial+entradas-saidas};
  });
+ return {sIns,sOuts,saldo,breakdown};
+}
+function updateCashCountDiff(){
+ let totalContado=0,totalEsperado=0,any=false;
+ document.querySelectorAll('[data-count-method]').forEach(inp=>{
+  const mid=inp.dataset.countMethod;
+  const esperado=Number(inp.dataset.esperado||0);
+  totalEsperado+=esperado;
+  const raw=inp.value.trim();
+  const diffEl=document.getElementById('diff_'+mid);
+  if(!raw){if(diffEl){diffEl.textContent='—';diffEl.className='meta'}return}
+  any=true;
+  const contado=moneyMaskParse(raw);
+  totalContado+=contado;
+  const diff=contado-esperado;
+  if(diffEl){diffEl.textContent=(diff>0?'+':'')+money(diff);diffEl.className=diff===0?'meta':(diff>0?'pos':'neg')}
+ });
+ const tc=document.getElementById('totalContado');if(tc)tc.textContent=any?money(totalContado):'—';
+ const td=document.getElementById('totalDiferenca');
+ if(td){if(any){const totalDiff=totalContado-totalEsperado;td.textContent=(totalDiff>0?'+':'')+money(totalDiff);td.className=totalDiff===0?'':(totalDiff>0?'pos':'neg')}else{td.textContent='—';td.className=''}}
+}
+function renderCashToggleDialog(){
+ if(!db.cash.open){
+  return `<div class="overlay show"><div class="panel"><div class="head"><h2>Abrir Caixa</h2><button class="x" id="closeOverlay">×</button></div>
+  <div class="field"><label>Valor inicial</label><input autocomplete="off" id="ctInitial" type="text" inputmode="decimal" placeholder="0,00"></div>
+  <div class="field"><label>Forma de pagamento</label><select id="ctMethod">${cashMethodOptionsHtml('cash')}</select></div>
+  ${formErr?`<div class="err">${esc(formErr)}</div>`:''}
+  <button class="primary" id="confirmCashToggle">Abrir caixa</button>
+  <button class="ghost" id="cancelCashToggle">Cancelar</button>
+  </div></div>`;
+ }
+ const {sIns,sOuts,saldo,breakdown}=cashSessionInfo();
  return `<div class="overlay show"><div class="panel"><div class="head"><h2>Fechar Caixa</h2><button class="x" id="closeOverlay">×</button></div>
  <div class="meta" style="margin-bottom:10px">Aberto em ${fmtDT(db.cash.openedAt)}</div>
  <div class="metric metric-4"><div><span class="meta">Saldo inicial</span><b>${money(db.cash.initial)}</b></div><div><span class="meta">Entradas</span><b class="pos">${money(sIns)}</b></div><div><span class="meta">Saídas</span><b class="neg">${money(sOuts)}</b></div><div><span class="meta">Saldo final</span><b>${money(saldo)}</b></div></div>
- <div class="cardbox" style="margin-top:10px"><h3>Conferência por forma de pagamento</h3><div class="stock-table-wrap"><table class="stock-table"><thead><tr><th>Forma</th><th>Inicial</th><th>Entradas</th><th>Saídas</th><th>Esperado</th></tr></thead><tbody>${breakdown.length?breakdown.map(b=>`<tr><td>${esc(b.name)}</td><td>${money(b.inicial)}</td><td class="pos">${money(b.entradas)}</td><td class="neg">${money(b.saidas)}</td><td><b>${money(b.esperado)}</b></td></tr>`).join(''):'<tr><td colspan="5" class="meta">Nenhuma forma de pagamento ativa e visível ao cliente cadastrada.</td></tr>'}</tbody></table></div><p class="meta" style="margin-top:6px">Confira o valor físico (dinheiro na gaveta) ou o extrato (Pix, cartão) de cada forma contra o "Esperado" para identificar sobra ou falta antes de confirmar o fechamento.</p></div>
+ <div class="cardbox" style="margin-top:10px"><h3>Conferência por forma de pagamento</h3><p class="meta" style="margin-bottom:8px">Informe abaixo o valor que você contou de verdade (dinheiro na gaveta, extrato do Pix, fechamento da maquininha) em cada forma. O sistema calcula a diferença na hora.</p><div class="stock-table-wrap"><table class="stock-table"><thead><tr><th>Forma</th><th>Esperado</th><th>Contado</th><th>Diferença</th></tr></thead><tbody>${breakdown.length?breakdown.map(b=>`<tr><td>${esc(b.name)}<div class="meta" style="font-weight:400">Inicial ${money(b.inicial)} + Entradas ${money(b.entradas)} − Saídas ${money(b.saidas)}</div></td><td><b>${money(b.esperado)}</b></td><td><input autocomplete="off" data-count-method="${b.id}" data-esperado="${b.esperado}" type="text" inputmode="decimal" placeholder="0,00" style="width:90px;text-align:right;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:6px;padding:5px 6px"></td><td><span id="diff_${b.id}" class="meta">—</span></td></tr>`).join(''):'<tr><td colspan="4" class="meta">Nenhuma forma de pagamento ativa e visível ao cliente cadastrada.</td></tr>'}</tbody>${breakdown.length?`<tfoot><tr><td><b>Total</b></td><td><b>${money(breakdown.reduce((s,b)=>s+b.esperado,0))}</b></td><td><b id="totalContado">—</b></td><td><b id="totalDiferenca">—</b></td></tr></tfoot>`:''}</table></div></div>
  <p class="meta" style="margin:10px 0">Confirme para encerrar a sessão de caixa atual.</p>
  <button class="primary danger" id="confirmCashToggle">Confirmar fechamento</button>
  <button class="ghost" id="cancelCashToggle">Cancelar</button>
@@ -4253,10 +4296,20 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
    db.cash.movements=db.cash.movements||[];db.cash.open=true;db.cash.initial=v;db.cash.initialMethod=document.getElementById('ctMethod')?.value||'cash';db.cash.openedAt=new Date().toISOString();db.cash.closedAt=null;
    formErr='';overlay=null;save();render();
   }else{
+   const {sIns,sOuts,saldo,breakdown}=cashSessionInfo();
+   const fullBreakdown=breakdown.map(b=>{
+    const inp=document.querySelector(`[data-count-method="${b.id}"]`);
+    const raw=inp?inp.value.trim():'';
+    const contado=raw?moneyMaskParse(raw):null;
+    return {...b,contado,diferenca:contado===null?null:contado-b.esperado};
+   });
+   db.cashClosings=db.cashClosings||[];
+   db.cashClosings.push({id:id('close'),openedAt:db.cash.openedAt,closedAt:new Date().toISOString(),initial:db.cash.initial,initialMethod:db.cash.initialMethod,sIns,sOuts,saldo,breakdown:fullBreakdown});
    db.cash.open=false;db.cash.closedAt=new Date().toISOString();
    formErr='';overlay=null;save();render();
   }
  });
+ document.querySelectorAll('[data-count-method]').forEach(inp=>inp.addEventListener('input',e=>{moneyMaskOnInput(e);updateCashCountDiff()}));
  document.getElementById('cmValue')?.addEventListener('input',moneyMaskOnInput);
  document.getElementById('confirmCashMove')?.addEventListener('click',()=>{
   if(!db.cash.open){formErr='O caixa está fechado.';render();return}
