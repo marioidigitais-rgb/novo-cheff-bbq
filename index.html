@@ -589,55 +589,20 @@ async function loadMenuFromSupabase(){
 // travado por causa disso; ele fica marcado como pendente e é reenviado
 // na próxima sincronização (ver syncAllToSupabase).
 async function saveOrderToSupabase(o){
- let customerRow=null;
- if(o.customer.phone){
-  const existing=await sb.from('customers').select('id').eq('phone',o.customer.phone).maybeSingle();
-  if(existing.data){
-   customerRow=existing.data;
-   await sb.from('customers').update({name:o.customer.name}).eq('id',customerRow.id);
-  }else{
-   const ins=await sb.from('customers').insert({name:o.customer.name,phone:o.customer.phone}).select('id').single();
-   if(ins.error)throw ins.error;
-   customerRow=ins.data;
-  }
- }
- if(o.customer.delivery==='entrega'&&customerRow){
-  const addrIns=await sb.from('customer_addresses').insert({customer_id:customerRow.id,label:'Endereço',street:o.customer.address,number:o.customer.number,complement:o.customer.complement||'',neighborhood_id:o.customer.neighborhood||null,neighborhood_name:o.customer.neighborhoodName||''});
-  if(addrIns.error)console.error('Não foi possível salvar o endereço do pedido '+o.id+' no Supabase:',addrIns.error);
- }
+ const c=o.customer;
+ const payments=(c.payments?.length?c.payments:[{payment:c.payment,amount:o.total}]).filter(p=>p.payment).map(p=>({payment:p.payment,amount:p.amount}));
  const subtotal=o.items.reduce((s,x)=>s+x.price*x.qty+(x.addons||[]).reduce((a,b)=>a+b.price*b.qty*x.qty,0),0);
- const orderRowBase={id:o.id,source:o.source||'online',status:o.status,customer_id:customerRow?.id||null,customer_name:o.customer.name,customer_phone:o.customer.phone||'',delivery_type:o.customer.delivery,table_name:o.customer.table||'',address:o.customer.address||'',number:o.customer.number||'',complement:o.customer.complement||'',neighborhood_id:o.customer.neighborhood||null,neighborhood_name:o.customer.neighborhoodName||'',delivery_fee:o.customer.deliveryFee||0,notes:o.customer.notes||'',subtotal,total:o.total,paid:!!o.paid};
- const orderRowExtra={created_at:o.createdAt||null,discount:Number(o.discount)||0,surcharge:Number(o.surcharge)||0,tendered:Number(o.tendered)||0,coupon_code:o.couponCode||null,coupon_discount:Number(o.couponDiscount)||0,credit_used:Number(o.creditUsed)||0,rider_id:o.riderId||null,paid_at:o.paidAt||null,change_for:o.customer.changeFor||'',rating:o.rating||null,rating_comment:o.ratingComment||null};
- const orderRow={...orderRowBase,...orderRowExtra};
- try{
-  const orderUp=await sb.from('orders').upsert(orderRow);
-  if(orderUp.error)throw orderUp.error;
- }catch(e){
-  // Algumas dessas colunas (desconto, cupom, entregador, data de criação
-  // etc.) podem não existir ainda na tabela orders do Supabase — tenta de
-  // novo só com os campos originais, pra não travar o envio do pedido.
-  const orderUp2=await sb.from('orders').upsert(orderRowBase);
-  if(orderUp2.error)throw orderUp2.error;
- }
- const payDel=await sb.from('order_payments').delete().eq('order_id',o.id);
- if(payDel.error)throw payDel.error;
- const payRows=(o.customer.payments?.length?o.customer.payments:[{payment:o.customer.payment,amount:o.total}]).filter(p=>p.payment).map(p=>({order_id:o.id,payment_method_id:p.payment,amount:p.amount}));
- if(payRows.length){const payIns=await sb.from('order_payments').insert(payRows);if(payIns.error)throw payIns.error;}
- const oldItems=await sb.from('order_items').select('id').eq('order_id',o.id);
- if(oldItems.error)throw oldItems.error;
- const oldItemIds=(oldItems.data||[]).map(x=>x.id);
- if(oldItemIds.length){
-  const delAddons=await sb.from('order_item_addons').delete().in('order_item_id',oldItemIds);
-  if(delAddons.error)throw delAddons.error;
- }
- const itemsDel=await sb.from('order_items').delete().eq('order_id',o.id);
- if(itemsDel.error)throw itemsDel.error;
- for(const item of o.items){
-  const itemIns=await sb.from('order_items').insert({order_id:o.id,product_id:item.productId,product_name:item.name,unit_price:item.price,qty:item.qty,notes:item.notes||''}).select('id').single();
-  if(itemIns.error)throw itemIns.error;
-  const addonRows=(item.addons||[]).map(a=>({order_item_id:itemIns.data.id,addon_id:a.id,addon_name:a.name,unit_price:a.price,qty:a.qty}));
-  if(addonRows.length){const addonIns=await sb.from('order_item_addons').insert(addonRows);if(addonIns.error)throw addonIns.error;}
- }
+ const payload={
+  id:o.id,createdAt:o.createdAt||null,source:o.source||'online',status:o.status,paid:!!o.paid,paidAt:o.paidAt||null,
+  subtotal,total:o.total,discount:Number(o.discount)||0,surcharge:Number(o.surcharge)||0,tendered:Number(o.tendered)||0,
+  couponCode:o.couponCode||null,couponDiscount:Number(o.couponDiscount)||0,creditUsed:Number(o.creditUsed)||0,
+  riderId:o.riderId||null,rating:o.rating||null,ratingComment:o.ratingComment||null,
+  customer:{name:c.name||'',phone:c.phone||'',delivery:c.delivery||null,table:c.table||'',address:c.address||'',number:c.number||'',complement:c.complement||'',neighborhood:c.neighborhood||null,neighborhoodName:c.neighborhoodName||'',deliveryFee:Number(c.deliveryFee)||0,notes:c.notes||'',changeFor:c.changeFor||''},
+  items:o.items.map(x=>({productId:x.productId,name:x.name,price:x.price,qty:x.qty,notes:x.notes||'',addons:(x.addons||[]).map(a=>({id:a.id,name:a.name,price:a.price,qty:a.qty}))})),
+  payments
+ };
+ const {error}=await sb.rpc('salvar_pedido',{p:payload});
+ if(error)throw error;
  __snapCommit('order:'+o.id,o);
 }
 async function fetchOrderFromSupabase(orderId){
