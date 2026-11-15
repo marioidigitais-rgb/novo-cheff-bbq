@@ -642,22 +642,13 @@ async function saveOrderToSupabase(o){
 }
 async function fetchOrderFromSupabase(orderId){
  try{
-  const orderR=await sb.from('orders').select('*').eq('id',orderId).maybeSingle();
-  if(orderR.error||!orderR.data)return null;
-  const r=orderR.data;
-  const itemsR=await sb.from('order_items').select('id,product_id,product_name,unit_price,qty,notes').eq('order_id',orderId);
-  if(itemsR.error)return null;
-  const itemRows=itemsR.data||[];
-  const itemIds=itemRows.map(x=>x.id);
-  let addonsByItem={};
-  if(itemIds.length){
-   const addonsR=await sb.from('order_item_addons').select('order_item_id,addon_id,addon_name,unit_price,qty').in('order_item_id',itemIds);
-   if(!addonsR.error){(addonsR.data||[]).forEach(a=>{(addonsByItem[a.order_item_id]=addonsByItem[a.order_item_id]||[]).push({id:a.addon_id,name:a.addon_name,price:Number(a.unit_price)||0,qty:Number(a.qty)||0})})}
-  }
-  const paysR=await sb.from('order_payments').select('payment_method_id,amount').eq('order_id',orderId);
-  const payRows=paysR.error?[]:(paysR.data||[]);
-  const payments=payRows.map(p=>({payment:p.payment_method_id,amount:Number(p.amount)||0}));
-  const items=itemRows.map(x=>({productId:x.product_id,name:x.product_name,price:Number(x.unit_price)||0,qty:Number(x.qty)||0,addons:addonsByItem[x.id]||[],notes:x.notes||''}));
+  const {data,error}=await sb.rpc('pedido_publico',{p_id:orderId});
+  if(error||!data||!data.order)return null;
+  const r=data.order;
+  const addonsByItem={};
+  (data.addons||[]).forEach(a=>{(addonsByItem[a.order_item_id]=addonsByItem[a.order_item_id]||[]).push({id:a.addon_id,name:a.addon_name,price:Number(a.unit_price)||0,qty:Number(a.qty)||0})});
+  const payments=(data.payments||[]).map(p=>({payment:p.payment_method_id,amount:Number(p.amount)||0}));
+  const items=(data.items||[]).map(x=>({productId:x.product_id,name:x.product_name,price:Number(x.unit_price)||0,qty:Number(x.qty)||0,addons:addonsByItem[x.id]||[],notes:x.notes||''}));
   return {
    id:r.id,
    createdAt:r.created_at||new Date().toISOString(),
@@ -4114,11 +4105,11 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
    // administrador, por exemplo) que ainda não chegou até este — confere
    // direto no Supabase antes de dizer que não achou.
    try{
-    const r=await sb.from('customers').select('*').eq('phone',full).maybeSingle();
-    if(!r.error&&r.data){
-     const addrR=await sb.from('customer_addresses').select('*').eq('customer_id',r.data.id);
-     const addresses=(addrR.data||[]).map(a=>({id:a.id,label:a.label||'',street:a.street||'',number:a.number||'',complement:a.complement||'',reference:a.reference||'',neighborhood:a.neighborhood_id||'',neighborhoodName:a.neighborhood_name||'',neighborhoodFee:Number(a.neighborhood_fee)||0}));
-     c={id:r.data.id,code:r.data.code||'',codeNum:r.data.code_num||0,name:r.data.name,phone:r.data.phone,credit:Number(r.data.credit)||0,addresses,defaultAddressId:r.data.default_address_id||(addresses[0]?.id||'')};
+    const rr=await sb.rpc('buscar_cliente_por_telefone',{p_phone:full});
+    const cd=rr.data&&rr.data.customer;
+    if(!rr.error&&cd){
+     const addresses=(rr.data.addresses||[]).map(a=>({id:a.id,label:a.label||'',street:a.street||'',number:a.number||'',complement:a.complement||'',reference:a.reference||'',neighborhood:a.neighborhood_id||'',neighborhoodName:a.neighborhood_name||'',neighborhoodFee:Number(a.neighborhood_fee)||0}));
+     c={id:cd.id,code:cd.code||'',codeNum:cd.code_num||0,name:cd.name,phone:cd.phone,credit:Number(cd.credit)||0,addresses,defaultAddressId:cd.default_address_id||(addresses[0]?.id||'')};
      db.customers.push(c);
      __snapCommit('customers',db.customers);
      localStorage.setItem(KEY,JSON.stringify(db));
