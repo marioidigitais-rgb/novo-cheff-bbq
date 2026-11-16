@@ -107,8 +107,11 @@
 .orders-toolbar select,.orders-toolbar input{background:var(--e);border:1px solid var(--line);border-radius:8px;padding:9px 12px;color:var(--cream)}
 .orders-toolbar select{min-width:130px}
 .orders-toolbar input{flex:1;min-width:180px}
-.orders-board{display:flex;gap:14px;overflow-x:auto;padding-bottom:10px;-webkit-overflow-scrolling:touch;align-items:flex-start}
-.orderCardWrap{flex:0 0 235px;display:flex;flex-direction:column;gap:8px}
+.orders-board{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;align-items:start}
+.orders-pager{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:12px;font-size:13px}
+.orders-pager button{padding:8px 12px}
+.orders-pager button:disabled{opacity:.4;cursor:default}
+.orderCardWrap{min-width:0;display:flex;flex-direction:column;gap:8px}
 .orderCard{flex:0 0 auto;width:100%;border-radius:12px;padding:14px;color:#fff;display:flex;flex-direction:column;gap:8px;position:relative}
 .orderCard.type-retirada{background:linear-gradient(160deg,var(--maroon),#4c1229)}
 .orderCard.type-local{background:linear-gradient(160deg,var(--navy),#13203d)}
@@ -272,7 +275,8 @@ td.neg{color:var(--red);font-weight:700}
 .lock-option{display:block;width:100%;text-align:left;padding:11px 14px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--cream);cursor:pointer;font-size:12.5px}
 .lock-option:last-child{border-bottom:0}
 .lock-option:hover{background:var(--e2)}
-@media(max-width:760px){.orderCardWrap{flex:0 0 200px}}
+@media(max-width:900px){.orders-board{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:560px){.orders-board{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style><style id="client-mobile-only-style">
 .client .top .cart,.client .top #cartTop,.client .top [data-cart-top]{display:none!important}
 .client .top{overflow:hidden}
@@ -2071,7 +2075,25 @@ function renderOrders(withTitle){
  </select>
  <input autocomplete="off" id="ordersSearch" type="search" placeholder="🔍 Pesquise o pedido" value="${esc(f.search||'')}">
  </div>
- <div class="orders-board" id="ordersBoard">${list.map(o=>renderOrder(o)).join('')||'<div class="empty-state">Nenhum pedido encontrado.</div>'}</div>`;
+ <div id="ordersBoardWrap">${ordersBoardHtml()}</div>`;
+}
+function ordersBoardHtml(){
+ const list=filteredOrders();const pageSize=30;
+ const totalPages=Math.max(1,Math.ceil(list.length/pageSize));
+ window.ordersPage=Math.min(Math.max(1,window.ordersPage||1),totalPages);
+ const page=window.ordersPage;
+ const slice=list.slice((page-1)*pageSize,page*pageSize);
+ return `<div class="orders-board" id="ordersBoard">${slice.map(o=>renderOrder(o)).join('')||'<div class="empty-state">Nenhum pedido encontrado.</div>'}</div>${totalPages>1?`<div class="orders-pager"><button type="button" id="ordersPrev" ${page<=1?'disabled':''}>‹ Anterior</button><span>Página ${page} de ${totalPages}</span><button type="button" id="ordersNext" ${page>=totalPages?'disabled':''}>Próxima ›</button></div>`:''}`;
+}
+function refreshOrdersBoard(){
+ const w=document.getElementById('ordersBoardWrap');if(!w)return;
+ w.innerHTML=ordersBoardHtml();
+ bindOrderCard(document.getElementById('ordersBoard'));
+ bindOrdersPager();
+}
+function bindOrdersPager(){
+ document.getElementById('ordersPrev')?.addEventListener('click',()=>{window.ordersPage=(window.ordersPage||1)-1;refreshOrdersBoard()});
+ document.getElementById('ordersNext')?.addEventListener('click',()=>{window.ordersPage=(window.ordersPage||1)+1;refreshOrdersBoard()});
 }
 function orderPaymentName(o){return o.customer.payments?.length?o.customer.payments.map(p=>`${db.payments.find(x=>x.id===p.payment)?.name||p.payment||'Não informado'} ${money(p.amount)}`).join(' + '):(db.payments.find(p=>p.id===o.customer.payment)?.name||o.customer.payment||'Não informado')}
 function estimatedMinutesFromSetting(){const s=db.settings.print?.estimatedTime||'';const nums=(s.match(/\d+/g)||[]).map(Number);if(!nums.length)return 30;if(nums.length>=2)return Math.round((nums[0]+nums[1])/2);return nums[0]}
@@ -2328,7 +2350,7 @@ function pdvCustomerBelowHtml(d){
 }
 function pdvCustomerResultsHtml(d){
  const hasQuery=!!(d.customerSearch||'').trim();
- if(!hasQuery)return `<div id="pdvCustomerResults" class="pdv-results" style="display:none"></div>`;
+ if(!hasQuery||d.customerId)return `<div id="pdvCustomerResults" class="pdv-results" style="display:none"></div>`;
  const filtered=db.customers.filter(c=>{let q=(d.customerSearch||'').toLowerCase().replace(/\D/g,'');let text=(c.name+' '+(c.phone||'')).toLowerCase();return text.includes((d.customerSearch||'').toLowerCase())||((c.phone||'').replace(/\D/g,'').includes(q)&&q)}).slice(0,8);
  return `<div id="pdvCustomerResults" class="pdv-results" style="position:absolute;left:0;right:0;top:100%;z-index:10">${filtered.length?filtered.map(c=>`<button type="button" class="pdv-result" data-pdv-customer="${c.id}"><b>${esc(c.name)}</b><span>${c.phone?esc(fmtPhoneDisplay(c.phone)):'Sem WhatsApp'}</span></button>`).join(''):'<div class="meta" style="padding:8px">Nenhum cliente encontrado.</div>'}</div>`;
 }
@@ -3921,8 +3943,9 @@ function closeCurrentOverlay(){
 function attach(){
  document.getElementById('menuToggle')?.addEventListener('click',()=>{window.adminOpsOpen=window.adminOpsOpen===false;mobileAdminNavOpen=!mobileAdminNavOpen;render()});
  document.getElementById('togglePDVCreate')?.addEventListener('click',()=>{window.pdvHideCreate=!window.pdvHideCreate;render()});
- document.getElementById('ordersFilterStatus')?.addEventListener('change',e=>{window.pdvOrderFilter=window.pdvOrderFilter||{status:'ativos',search:''};window.pdvOrderFilter.status=e.target.value;render()});
- document.getElementById('ordersSearch')?.addEventListener('input',e=>{window.pdvOrderFilter=window.pdvOrderFilter||{status:'ativos',search:''};window.pdvOrderFilter.search=e.target.value;const board=document.getElementById('ordersBoard');if(board){board.innerHTML=filteredOrders().map(o=>renderOrder(o)).join('')||'<div class="empty-state">Nenhum pedido encontrado.</div>';bindOrderCard(board)}});
+ document.getElementById('ordersFilterStatus')?.addEventListener('change',e=>{window.pdvOrderFilter=window.pdvOrderFilter||{status:'ativos',search:''};window.pdvOrderFilter.status=e.target.value;window.ordersPage=1;render()});
+bindOrdersPager();
+ document.getElementById('ordersSearch')?.addEventListener('input',e=>{window.pdvOrderFilter=window.pdvOrderFilter||{status:'ativos',search:''};window.pdvOrderFilter.search=e.target.value;window.ordersPage=1;refreshOrdersBoard()});
  bindOrderCard(document);
 
  document.querySelectorAll('[data-orderitem-plus]').forEach(e=>e.onclick=()=>{const o=db.orders.find(x=>x.id===window.viewingOrder);if(!o)return;const x=o.items[Number(e.dataset.orderitemPlus)],p=db.products.find(p=>p.id===x.productId);if(p&&getProductStock(p)>0){consumeProductStock(p,1,{orderId:o.id});x.qty++;recalcOrderTotal(o);render()}});
