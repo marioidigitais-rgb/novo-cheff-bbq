@@ -600,7 +600,7 @@ async function saveOrderToSupabase(o){
   id:o.id,createdAt:o.createdAt||null,source:o.source||'online',status:o.status,paid:!!o.paid,paidAt:o.paidAt||null,
   subtotal,total:o.total,discount:Number(o.discount)||0,surcharge:Number(o.surcharge)||0,tendered:Number(o.tendered)||0,
   couponCode:o.couponCode||null,couponDiscount:Number(o.couponDiscount)||0,creditUsed:Number(o.creditUsed)||0,
-  riderId:o.riderId||null,rating:o.rating||null,ratingComment:o.ratingComment||null,
+  riderId:o.riderId||null,rating:o.rating||null,ratingComment:o.ratingComment||null,useCredit:(Number(o.creditUsed)||0)>0,
   customer:{name:c.name||'',phone:c.phone||'',delivery:c.delivery||null,table:c.table||'',address:c.address||'',number:c.number||'',complement:c.complement||'',neighborhood:c.neighborhood||null,neighborhoodName:c.neighborhoodName||'',deliveryFee:Number(c.deliveryFee)||0,notes:c.notes||'',changeFor:c.changeFor||''},
   items:o.items.map(x=>({productId:x.productId,name:x.name,price:x.price,qty:x.qty,notes:x.notes||'',addons:(x.addons||[]).map(a=>({id:a.id,name:a.name,price:a.price,qty:a.qty}))})),
   payments
@@ -1777,19 +1777,61 @@ function render(){
 }
 function activeCategories(){return db.categories.filter(c=>c.active!==false)}
 function currentClientCat(){const acts=activeCategories();return acts.some(c=>c.id===cat)?cat:acts[0]?.id}
+function refreshTrackingOrder(oid){
+ fetchOrderFromSupabase(oid).then(fetched=>{
+  if(fetched){
+   const idx=db.orders.findIndex(x=>x.id===oid);
+   if(idx>=0)db.orders[idx]=fetched;else db.orders.push(fetched);
+   __snapCommit('order:'+fetched.id,fetched);
+   localStorage.setItem(KEY,JSON.stringify(db));
+  }
+  window.__trackingLoaded=true;
+  if(route==='tracking')render();
+ });
+}
+function orderBreakdownHtml(o){
+ const items=o.items||[];
+ const itemsTotal=items.reduce((s,x)=>s+x.price*x.qty+(x.addons||[]).reduce((a,b)=>a+b.price*b.qty*x.qty,0),0);
+ const fee=Number(o.customer.deliveryFee)||0;
+ const surcharge=Number(o.surcharge)||0;
+ const credit=Number(o.creditUsed)||0;
+ const coupon=Number(o.couponDiscount)||0;
+ const manual=Math.max(0,(Number(o.discount)||0)-credit-coupon);
+ const beforePay=Math.max(0,itemsTotal+fee+surcharge-(Number(o.discount)||0));
+ const payAdj=Math.round(((Number(o.total)||0)-beforePay)*100)/100;
+ const payId=o.customer.payments?.[0]?.payment||o.customer.payment||'';
+ const payName=(db.payments||[]).find(p=>p.id===payId)?.name||'';
+ const green='style="color:var(--ok)"';
+ const line=(label,val,style='')=>`<div class="row" style="font-size:13px;margin-top:4px"><span>${label}</span><span ${style}>${val}</span></div>`;
+ const rows=[line('Subtotal dos itens',money(itemsTotal))];
+ if(fee>0)rows.push(line('Taxa de entrega',money(fee)));
+ if(surcharge>0)rows.push(line('Acréscimo',money(surcharge)));
+ if(manual>0)rows.push(line('Desconto',`-${money(manual)}`,green));
+ if(coupon>0)rows.push(line(`Cupom ${esc(o.couponCode||'')}`,`-${money(coupon)}`,green));
+ if(credit>0)rows.push(line('Crédito usado',`-${money(credit)}`,green));
+ if(Math.abs(payAdj)>=0.01){
+  const label=`${payAdj>0?'Taxa':'Desconto'} ${payName?`(${esc(payName)})`:'da forma de pagamento'}`;
+  rows.push(line(label,`${payAdj>0?'+':'-'}${money(Math.abs(payAdj))}`,payAdj>0?'':green));
+ }
+ const itemsHtml=items.map(x=>`<div class="itemrow"><div class="row"><span>${x.qty}x ${esc(x.name)}</span><b>${money(x.price*x.qty)}</b></div>${(x.addons||[]).map(a=>`<div class="row" style="font-size:12px;opacity:.85;padding-left:14px"><span>+ ${a.qty*x.qty}x ${esc(a.name)}</span><span>${money(a.price*a.qty*x.qty)}</span></div>`).join('')}</div>`).join('');
+ return `<div class="cardbox"><h3>Itens do pedido</h3>${itemsHtml}<div style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px">${rows.join('')}</div><div class="row" style="margin-top:10px"><b>Total</b><b class="price">${money(o.total)}</b></div></div>`;
+}
 function renderTrackingPage(){
  const oid=decodeURIComponent(location.hash.replace('#pedido-',''));
  let o=db.orders.find(x=>x.id===oid);
+ if(window.__trackingFetchedFor!==oid){
+  window.__trackingFetchedFor=oid;
+  window.__trackingLoaded=!!o;
+  refreshTrackingOrder(oid);
+ }
+ if(!window.__trackingTimer){
+  window.__trackingTimer=setInterval(()=>{
+   if(route!=='tracking')return;
+   const id=decodeURIComponent(location.hash.replace('#pedido-',''));
+   if(id)refreshTrackingOrder(id);
+  },20000);
+ }
  if(!o){
-  if(window.__trackingFetchedFor!==oid){
-   window.__trackingFetchedFor=oid;
-   window.__trackingLoaded=false;
-   fetchOrderFromSupabase(oid).then(fetched=>{
-    if(fetched){db.orders.push(fetched);__snapCommit('order:'+fetched.id,fetched);localStorage.setItem(KEY,JSON.stringify(db))}
-    window.__trackingLoaded=true;
-    render();
-   });
-  }
   if(!window.__trackingLoaded){
    return `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--cream)"><div style="text-align:center"><div class="loading-spinner"></div>Buscando seu pedido…</div></div>`;
   }
@@ -1818,11 +1860,7 @@ function renderTrackingPage(){
   </div>`}
   ${db.settings.print.estimatedTime&&curIdx>=0&&curIdx<steps.length-1?`<p class="meta" style="text-align:center;margin-top:6px">Tempo estimado: ${esc(db.settings.print.estimatedTime)}</p>`:''}
  </div>
- <div class="cardbox">
-  <h3>Itens do pedido</h3>
-  ${o.items.map(x=>`<div class="itemrow"><div class="row"><span>${x.qty}x ${esc(x.name)}</span><b>${money(x.price*x.qty)}</b></div></div>`).join('')}
-  <div class="row" style="margin-top:8px"><b>Total</b><b class="price">${money(o.total)}</b></div>
- </div>
+ ${orderBreakdownHtml(o)}
  ${o.status==='concluido'?renderRatingBox(o):''}
  <button class="ghost" style="margin-top:10px" onclick="location.hash=''">Voltar ao cardápio</button>
  </div>`;
@@ -4076,6 +4114,7 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
   o.rating=window.ratingDraft.stars;
   o.ratingComment=(document.getElementById('ratingComment')?.value||'').trim();
   window.ratingDraft=null;
+  sb.rpc('avaliar_pedido',{p_id:o.id,p_rating:o.rating,p_comment:o.ratingComment}).then(()=>{}).catch(e=>console.error('Avaliação não salva:',e));
   save();render();
  });
  document.querySelectorAll('[data-delivery]').forEach(e=>e.onclick=()=>{window.checkoutDraft.delivery=e.dataset.delivery;render()});document.querySelectorAll('[data-payment]').forEach(e=>e.onclick=()=>{window.checkoutDraft.payment=e.dataset.payment;render()});document.getElementById('submitOrder')?.addEventListener('click',submitCustomerOrder);
