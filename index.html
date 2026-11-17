@@ -1338,12 +1338,33 @@ function fichaCostBreakdown(p){
  const price=Number(p&&p.price)||0;
  return {materias,insumos,pis,servicos,total,price,margin:price-total,marginPct:price>0?(price-total)/price*100:0};
 }
+function targetMarginPct(){const v=Number(db.settings?.targetMarginPct);return Number.isFinite(v)&&v>=0&&v<95?v:60}
+function suggestedPrice(cost){const t=targetMarginPct();return cost>0&&t<95?Math.ceil(cost/(1-t/100)*2)/2:0}
 function fichaCustoHtml(p){
  const b=fichaCostBreakdown(p);
  const n=itemsSoldLast30Days();
- const row=(l,v,st='')=>`<div class="row" style="font-size:13px;margin-top:3px"><span>${l}</span><span ${st}>${money(v)}</span></div>`;
+ const row=(l,v,st='')=>`<div class="row" style="font-size:13px;margin-top:3px"><span>${l}</span><span ${st}>${v}</span></div>`;
  const servicoLabel=n>0?`Serviços (despesas fixas ÷ ${n} itens vendidos em 30 dias)`:'Serviços (sem vendas nos últimos 30 dias)';
- return `<div class="cardbox" style="margin-top:14px"><h3 style="margin:0 0 6px">💰 Custo e preço de venda</h3>${row('Matérias-primas',b.materias)}${row('Insumos (embalagens)',b.insumos)}${row('Produtos intermediários (PI)',b.pis)}${p.type==='pi'?'':row(servicoLabel,b.servicos)}<div class="row" style="margin-top:8px;border-top:1px solid var(--line);padding-top:6px"><b>Custo total</b><b>${money(b.total)}</b></div><div class="row" style="font-size:13px;margin-top:3px"><span>Preço de venda</span><span>${money(b.price)}</span></div><div class="row" style="font-size:13px;margin-top:3px"><span>Margem</span><span style="color:${b.margin>=0?'var(--ok)':'#c0392b'}">${money(b.margin)} (${b.marginPct.toFixed(1)}%)</span></div></div>`;
+ const sug=suggestedPrice(b.total);
+ const pct=b.price>0?(b.margin/b.price*100):0;
+ const stock=productHasRecipe(p)?getProductStock(p):null;
+ return `<div class="cardbox" style="margin-top:14px"><h3 style="margin:0 0 6px">💰 Custo e preço de venda</h3>${row('Matérias-primas',money(b.materias))}${row('Insumos (embalagens)',money(b.insumos))}${row('Produtos intermediários (PI)',money(b.pis))}${p.type==='pi'?'':row(servicoLabel,money(b.servicos))}<div class="row" style="margin-top:8px;border-top:1px solid var(--line);padding-top:6px"><b>Custo total</b><b>${money(b.total)}</b></div><div class="row" style="font-size:13px;margin-top:8px"><span>Margem desejada</span><span><input id="fichaTargetMargin" type="number" min="0" max="94" step="1" value="${targetMarginPct()}" style="width:70px;padding:4px"> %</span></div><div class="row" style="font-size:13px;margin-top:3px"><span>Preço sugerido</span><b id="fichaSugestao">${sug?money(sug):'—'}</b></div><div class="row" style="font-size:13px;margin-top:3px"><span>Preço de venda atual</span><span>${money(b.price)}</span></div><div class="row" style="font-size:13px;margin-top:3px"><span>Lucro por unidade</span><span id="fichaLucro" style="color:${b.margin>=0?'var(--ok)':'#c0392b'}">${money(b.margin)} (${pct.toFixed(1)}%)</span></div>${stock!==null?`<div class="row" style="font-size:13px;margin-top:6px"><span>Estoque disponível (pelos insumos e matérias-primas)</span><b>${stock}</b></div>`:''}</div>`;
+}
+function bindFichaLive(){
+ const p=db.products.find(x=>x.id===window.editingProduct);
+ if(!p)return;
+ const cost=fichaCostBreakdown(p).total;
+ document.getElementById('epPrice')?.addEventListener('input',()=>{
+  const price=moneyMaskParse(document.getElementById('epPrice')?.value||'');
+  const m=price-cost;const el=document.getElementById('fichaLucro');
+  if(el){el.textContent=`${money(m)} (${price>0?(m/price*100).toFixed(1):'0.0'}%)`;el.style.color=m>=0?'var(--ok)':'#c0392b'}
+ });
+ document.getElementById('fichaTargetMargin')?.addEventListener('change',e=>{
+  db.settings.targetMarginPct=Math.min(94,Math.max(0,Number(e.target.value)||0));
+  save();
+  const sug=suggestedPrice(cost);const el=document.getElementById('fichaSugestao');
+  if(el)el.textContent=sug?money(sug):'—';
+ });
 }
 function productAvgCost(pid){
  try{
@@ -2538,7 +2559,7 @@ function renderEditProductModal(){
  <div class="field"><label>Categoria</label>${db.categories.length?`<div class="row" style="gap:8px"><select id="epCat" style="flex:1">${db.categories.map(c=>`<option value="${c.id}" ${c.id===p.cat?'selected':''}>${esc(c.name)}</option>`).join('')}</select><button type="button" class="btn" id="epNewCatToggle" style="white-space:nowrap">+ Novo</button></div><div id="epNewCatWrap" style="display:none;margin-top:8px"><input autocomplete="off" id="epNewCatName" placeholder="Nome da nova categoria"></div>`:`<input autocomplete="off" id="epNewCatName" placeholder="Nome da nova categoria"><p class="meta" style="margin-top:6px">Nenhuma categoria cadastrada ainda — digite acima para criar a primeira.</p>`}</div>
  <div class="field"><label>Classificação (opcional)</label><select id="epPackageType"><option value="">Nenhuma</option>${(db.packageTypes||[]).map(t=>`<option value="${t.id}" ${t.id===p.packageType?'selected':''}>${esc(t.name)}</option>`).join('')}<option value="__new__">+ Cadastrar nova classificação</option></select><p class="meta" style="margin-top:6px">Use para agrupar e ordenar o cardápio do cliente por tipo (ex.: Lata, PET, Garrafa) — dentro da mesma categoria, os produtos aparecem agrupados por classificação e em ordem alfabética.</p></div>
  <div class="cardbox" style="margin-top:14px"><h3>💰 Preço e estoque</h3>
- <div class="formgrid"><div class="field"><label>Custo (calculado automaticamente)</label><input autocomplete="off" id="epCost" type="text" value="${money(productAvgCost(p.id))}" disabled></div><div class="field"><label>Valor de venda</label><input autocomplete="off" id="epPrice" type="text" inputmode="decimal" value="${moneyMaskFormat(p.price)}"></div></div>
+ <div class="formgrid"><div class="field"><label>Custo (calculado automaticamente)</label><input autocomplete="off" id="epCost" type="text" value="${money(fichaCostBreakdown(p).total)}" disabled></div><div class="field"><label>Valor de venda</label><input autocomplete="off" id="epPrice" type="text" inputmode="decimal" value="${moneyMaskFormat(p.price)}"></div></div>
  <p class="meta" style="margin-top:-6px;margin-bottom:11px">💰 Custo calculado automaticamente pela média das últimas 3 entradas de fornecedor deste produto${(db.stockMovements||[]).some(m=>m.productId===p.id&&m.type==='entrada')?'':' (ainda sem entradas registradas — o custo é atualizado ao registrar entradas em Estoque › Entradas)'}.</p>
  <div class="formgrid"><div class="field"><label>Preço antigo (opcional, para promoção)</label><input autocomplete="off" id="epOldPrice" type="text" inputmode="decimal" value="${p.oldPrice?moneyMaskFormat(p.oldPrice):''}" placeholder="0,00"></div><div class="field"><label>Estoque${productHasRecipe(p)?' (calculado pela receita)':''}</label><input autocomplete="off" id="epStock" type="number" min="0" value="${getProductStock(p)}" ${productHasRecipe(p)?'disabled title="Este produto tem receita: o estoque é calculado automaticamente a partir das matérias-primas."':''}></div></div>${productHasRecipe(p)?'<p class="meta" style="margin-top:-6px;margin-bottom:11px">📦 O estoque deste produto é calculado automaticamente com base no saldo das matérias-primas da receita.</p>':''}
  <div class="field"><label>Avisar quando o estoque ficar menor ou igual a (opcional)</label><input autocomplete="off" id="epLowStock" type="number" min="0" value="${p.lowStockThreshold||''}" placeholder="Ex.: 5"></div>
@@ -4247,7 +4268,7 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
   if(!name||!(price>0)||!catId){formErr='Preencha nome, categoria e preço.';render();return}
   let type=document.getElementById('npType')?.value==='pi'?'pi':'pa';
   db.products.push({id:id('p'),cat:catId,name,price,oldPrice,stock,desc,type,active:document.getElementById('npActive')?.checked!==false,showStock:document.getElementById('npShowStock')?.checked||false,addons,packageType:document.getElementById('npPackageType')?.value||'',lowStockThreshold:Math.max(0,Number(document.getElementById('npLowStock')?.value||0))||null,photos:window.npPhotoDataList||[],photo:(window.npPhotoDataList||[])[0]||null});
-  window.npPhotoDataList=null;formErr='';overlay=null;save();render()
+  const newP=db.products[db.products.length-1];window.npPhotoDataList=null;formErr='';save();window.editingProduct=newP.id;window.epPhotoDataList=null;window.epTypeSelected=null;window.epIsNewDup=false;window.epSnapshot=JSON.parse(JSON.stringify(newP));overlay='editProduct';render()
  });
  document.querySelectorAll('[data-editprod]').forEach(e=>e.onclick=()=>{window.editingProduct=e.dataset.editprod;window.epPhotoDataList=null;window.epTypeSelected=null;const p=db.products.find(x=>x.id===e.dataset.editprod);window.epSnapshot=p?JSON.parse(JSON.stringify(p)):null;window.epIsNewDup=false;formErr='';overlay='editProduct';render()});
  document.querySelectorAll('[data-viewcomposition]').forEach(e=>e.addEventListener('click',ev=>{ev.stopPropagation();window.viewingComposition=e.dataset.viewcomposition;window.compositionReturnTo=null;overlay='productComposition';render()}));
@@ -4328,7 +4349,8 @@ document.querySelectorAll('[data-addon-minus]').forEach(e=>e.onclick=()=>{let ai
  document.getElementById('epNewCatToggle')?.addEventListener('click',()=>{const wrap=document.getElementById('epNewCatWrap');if(!wrap)return;const showing=wrap.style.display!=='none';wrap.style.display=showing?'none':'block';if(!showing)document.getElementById('epNewCatName')?.focus()});
  document.getElementById('epPackageType')?.addEventListener('change',e=>handlePackageTypeSelect(e.target));
  document.getElementById('saveEditProduct')?.addEventListener('click',()=>{let p=db.products.find(x=>x.id===window.editingProduct);if(!p)return;let name=epName.value.trim(),price=moneyMaskParse(epPrice.value),oldPrice=Math.max(0,moneyMaskParse(document.getElementById('epOldPrice')?.value)),stock=Math.max(0,Number(epStock.value||0));let newCatEl=document.getElementById('epNewCatName'),newCatName=newCatEl?newCatEl.value.trim():'';let catEl=document.getElementById('epCat'),catId=null;if(newCatName){let c=findOrCreateCategoryByName(newCatName);catId=c?.id||null}else if(catEl)catId=catEl.value;if(!name||!(price>0)||!catId){formErr='Informe nome, categoria e preço válidos.';render();return}p.name=name;p.cat=catId;p.price=price;p.oldPrice=oldPrice;p.type=document.getElementById('epType')?.value==='pi'?'pi':'pa';if(!productHasRecipe(p))p.stock=stock;p.desc=epDesc.value.trim();p.showStock=document.getElementById('epShowStock')?.checked||false;p.active=document.getElementById('epActive')?.checked||false;p.packageType=document.getElementById('epPackageType')?.value||'';p.lowStockThreshold=Math.max(0,Number(document.getElementById('epLowStock')?.value||0))||null;p.addons=[...document.querySelectorAll('[data-editaddon]:checked')].map(x=>{let aid=x.dataset.editaddon,a=db.addons.find(y=>y.id===aid),el=document.getElementById('editAddonMax_'+aid),mx=Math.max(1,Math.min(a?a.max:1,Number(el?.textContent||1)));return {id:aid,max:mx}});if(window.epPhotoDataList&&window.epPhotoDataList.length){p.photos=[...(p.photos||[]),...window.epPhotoDataList];p.photo=p.photos[0]||null}window.epPhotoDataList=null;window.epSnapshot=null;window.epIsNewDup=false;formErr='';overlay=null;window.editingProduct=null;save();render()});
- document.getElementById('deleteProduct')?.addEventListener('click',()=>{let p=db.products.find(x=>x.id===window.editingProduct);if(!p)return;if(!confirm('Excluir "'+p.name+'"? Esta ação não pode ser desfeita.'))return;db.products=db.products.filter(x=>x.id!==p.id);overlay=null;window.editingProduct=null;window.epSnapshot=null;window.epIsNewDup=false;save();render()});
+ bindFichaLive();
+document.getElementById('deleteProduct')?.addEventListener('click',()=>{let p=db.products.find(x=>x.id===window.editingProduct);if(!p)return;if(!confirm('Excluir "'+p.name+'"? Esta ação não pode ser desfeita.'))return;db.products=db.products.filter(x=>x.id!==p.id);overlay=null;window.editingProduct=null;window.epSnapshot=null;window.epIsNewDup=false;save();render()});
  document.querySelectorAll('[data-estoque-view]').forEach(e=>e.onclick=()=>{window.estoqueView=e.dataset.estoqueView;formErr='';render()});
  bindItemPickerResults();
  bindSupplierPickerResults();
