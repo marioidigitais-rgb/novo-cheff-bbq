@@ -107,12 +107,12 @@
 .orders-toolbar select,.orders-toolbar input{background:var(--e);border:1px solid var(--line);border-radius:8px;padding:9px 12px;color:var(--cream)}
 .orders-toolbar select{min-width:130px}
 .orders-toolbar input{flex:1;min-width:180px}
-.orders-board{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;align-items:start}
+.orders-board{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;align-items:stretch;grid-auto-rows:1fr}
 .orders-pager{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:12px;font-size:13px}
 .orders-pager button{padding:8px 12px}
 .orders-pager button:disabled{opacity:.4;cursor:default}
-.orderCardWrap{min-width:0;display:flex;flex-direction:column;gap:8px}
-.orderCard{flex:0 0 auto;width:100%;border-radius:12px;padding:14px;color:#fff;display:flex;flex-direction:column;gap:8px;position:relative}
+.orderCardWrap{min-width:0;height:100%;display:flex;flex-direction:column;gap:8px}
+.orderCard{flex:1 1 auto;width:100%;border-radius:12px;padding:14px;color:#fff;display:flex;flex-direction:column;gap:8px;position:relative}
 .orderCard.type-retirada{background:linear-gradient(160deg,var(--maroon),#4c1229)}
 .orderCard.type-local{background:linear-gradient(160deg,var(--navy),#13203d)}
 .orderCard.type-entrega{background:linear-gradient(160deg,var(--green2),#1c5636)}
@@ -1318,6 +1318,33 @@ function productUnitCost(p){
   return 0;
  }
 }
+function monthlyFixedCosts(){return (db.expenses||[]).filter(e=>e.active!==false).reduce((s,e)=>s+(Number(e.monthlyValue)||0),0)}
+function itemsSoldLast30Days(){const since=Date.now()-30*864e5;return (db.orders||[]).filter(o=>o.status!=='cancelado'&&new Date(o.createdAt).getTime()>=since).reduce((s,o)=>s+(o.items||[]).reduce((a,x)=>a+(Number(x.qty)||0),0),0)}
+function serviceCostPerItem(){const n=itemsSoldLast30Days();return n>0?monthlyFixedCosts()/n:0}
+function isInsumoIngredient(ing){return /embalagem|insumo/i.test(materiaSectionName(ing?.section)||'')}
+function fichaCostBreakdown(p){
+ let materias=0,insumos=0,pis=0;
+ if(productHasRecipe(p)){
+  for(const r of p.recipe){
+   const qty=Number(r.qty)||0;
+   if(r.kind==='pi'){const sub=db.products.find(x=>x.id===r.productId);pis+=sub?productUnitCost(sub)*qty:0;continue}
+   const ing=db.ingredients.find(i=>i.id===r.ingredientId);
+   const c=ing?(Number(ing.cost)||0)*qty:0;
+   if(isInsumoIngredient(ing))insumos+=c;else materias+=c;
+  }
+ }else{materias=productUnitCost(p)}
+ const servicos=p&&p.type==='pi'?0:serviceCostPerItem();
+ const total=materias+insumos+pis+servicos;
+ const price=Number(p&&p.price)||0;
+ return {materias,insumos,pis,servicos,total,price,margin:price-total,marginPct:price>0?(price-total)/price*100:0};
+}
+function fichaCustoHtml(p){
+ const b=fichaCostBreakdown(p);
+ const n=itemsSoldLast30Days();
+ const row=(l,v,st='')=>`<div class="row" style="font-size:13px;margin-top:3px"><span>${l}</span><span ${st}>${money(v)}</span></div>`;
+ const servicoLabel=n>0?`Serviços (despesas fixas ÷ ${n} itens vendidos em 30 dias)`:'Serviços (sem vendas nos últimos 30 dias)';
+ return `<div class="cardbox" style="margin-top:14px"><h3 style="margin:0 0 6px">💰 Custo e preço de venda</h3>${row('Matérias-primas',b.materias)}${row('Insumos (embalagens)',b.insumos)}${row('Produtos intermediários (PI)',b.pis)}${p.type==='pi'?'':row(servicoLabel,b.servicos)}<div class="row" style="margin-top:8px;border-top:1px solid var(--line);padding-top:6px"><b>Custo total</b><b>${money(b.total)}</b></div><div class="row" style="font-size:13px;margin-top:3px"><span>Preço de venda</span><span>${money(b.price)}</span></div><div class="row" style="font-size:13px;margin-top:3px"><span>Margem</span><span style="color:${b.margin>=0?'var(--ok)':'#c0392b'}">${money(b.margin)} (${b.marginPct.toFixed(1)}%)</span></div></div>`;
+}
 function productAvgCost(pid){
  try{
   const movs=(db.stockMovements||[]).filter(m=>m.productId===pid&&m.type==='entrada').slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,3);
@@ -1735,12 +1762,23 @@ function notifyAdmin(order){if(!validPhone(db.settings.adminWhatsApp))return '';
 function notifyCustomer(order,status){if(!validPhone(order.customer.phone))return '';return wa(order.customer.phone,'Olá, '+order.customer.name+'! Pedido '+order.id+' está '+labelStatus(status)+'.')}
 function orderTypeMsgKey(order){return order.customer.delivery==='entrega'?'entrega':order.customer.delivery==='local'?'mesa':'retirada'}
 function fillTemplate(tpl,order){return String(tpl||'').replace(/\{cliente\}/g,order.customer.name||'').replace(/\{id\}/g,order.id).replace(/\{entregador\}/g,db.riders.find(r=>r.id===order.riderId)?.name||'')}
-function notifyCustomerTemplate(order){if(!validPhone(order.customer.phone))return '';const key=orderTypeMsgKey(order),tpl=db.settings.messages[key];const link=location.origin+location.pathname+'#pedido-'+encodeURIComponent(order.id);return wa(order.customer.phone,fillTemplate(tpl,order)+'\n\nAcompanhe seu pedido: '+link)}
+function trackingLink(order){return location.origin+location.pathname+'#pedido-'+encodeURIComponent(order.id)}
+function trackingLine(order){return '\n\nVocê está acompanhando seu pedido por lá: '+trackingLink(order)}
+function orderReadyText(order){const dest=order.customer.delivery==='entrega'?'e aguardando o entregador 🛵':order.customer.delivery==='mesa'?'para consumo 🍽️':'para retirada no balcão 📦';return 'Olá, {cliente}! Seu pedido {id} está pronto '+dest}
+function orderStatusText(order){
+ const st=order.status;
+ if(st==='recebido')return 'Olá, {cliente}! Seu pedido {id} foi recebido e já está na fila 🔥';
+ if(st==='preparando')return 'Olá, {cliente}! Seu pedido {id} está em preparo 👨‍🍳';
+ if(st==='aguardando_retirada'||st==='pronto')return orderReadyText(order);
+ if(st==='saiu_entrega')return 'Olá, {cliente}! Seu pedido {id} saiu para entrega 🛵';
+ return null;
+}
+function notifyCustomerTemplate(order){if(!validPhone(order.customer.phone))return '';const txt=orderStatusText(order)||db.settings.messages[orderTypeMsgKey(order)];return wa(order.customer.phone,fillTemplate(txt,order)+trackingLine(order))}
 function paymentLabel(o){return (o.customer.payments&&o.customer.payments.length)?o.customer.payments.map(p=>db.payments.find(x=>x.id===p.payment)?.name||p.payment).join(' + '):(db.payments.find(p=>p.id===o.customer.payment)?.name||o.customer.payment||'Não informado')}
 function deliveryLabel(o){return o.customer.delivery==='entrega'?'Entrega':o.customer.delivery==='local'?'Local':'Retirada'}
 function orderItemsSummary(order){const lines=groupItemsForDisplay(order.items||[]).map(x=>{const addonsTxt=(x.addons||[]).map(a=>`\n   + ${a.qty} ${a.name}`).join('');return `${x.qty} ${x.name} (${money(x.price*x.qty)})${addonsTxt}`});return lines.join('\n———————————\n')+`\n———————————\nTOTAL: ${money(order.total)}`}
-function notifyCustomerStart(order){if(!validPhone(order.customer.phone))return '';const greet=fillTemplate(db.settings.messages.saudacao,order);const info=orderTimeInfo(order);const prazo=info.endAt.toLocaleDateString('pt-BR')+' '+info.endAt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});const header=`${db.settings.storeName}\n\nPEDIDO #${order.id}\n\nNome: ${order.customer.name}\nWhatsApp: ${fmtPhoneDisplay(order.customer.phone)}\nForma Entrega: ${deliveryLabel(order)}\nPrazo Estimado: ${prazo}\nPagamento: ${paymentLabel(order)}`;const msg=`${greet}\n\n${header}\n\n———————————\n${orderItemsSummary(order)}\n\nMuito obrigado pela preferência!`;return wa(order.customer.phone,msg)}
-function notifyCustomerEnd(order){if(!validPhone(order.customer.phone))return '';return wa(order.customer.phone,fillTemplate(db.settings.messages.encerramento,order))}
+function notifyCustomerStart(order){if(!validPhone(order.customer.phone))return '';const greet=fillTemplate(db.settings.messages.saudacao,order);const info=orderTimeInfo(order);const prazo=info.endAt.toLocaleDateString('pt-BR')+' '+info.endAt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});const header=`${db.settings.storeName}\n\nPEDIDO #${order.id}\n\nNome: ${order.customer.name}\nWhatsApp: ${fmtPhoneDisplay(order.customer.phone)}\nForma Entrega: ${deliveryLabel(order)}\nPrazo Estimado: ${prazo}\nPagamento: ${paymentLabel(order)}`;const msg=`${greet}\n\n${header}\n\n———————————\n${orderItemsSummary(order)}\n\nMuito obrigado pela preferência!`;return wa(order.customer.phone,msg+trackingLine(order))}
+function notifyCustomerEnd(order){if(!validPhone(order.customer.phone))return '';return wa(order.customer.phone,fillTemplate(db.settings.messages.encerramento,order)+'\n\nVocê pode avaliar seu pedido por lá: '+trackingLink(order))}
 function notifyCustomerCancel(order){if(!validPhone(order.customer.phone))return '';return wa(order.customer.phone,fillTemplate(db.settings.messages.cancelamento,order))}
 function notifyRider(order,rider){if(!validPhone(rider?.phone))return '';const end=order.customer.delivery==='entrega'?`${order.customer.address}, ${order.customer.number}${order.customer.complement?' - '+order.customer.complement:''} · ${order.customer.neighborhoodName||''}`:'';return wa(rider.phone,`Novo pedido para entrega: ${order.id}%0ACliente: ${order.customer.name}%0AEndereço: ${end}%0ATotal: ${money(order.total)}`)}
 function orderTypeLabel(order){return order.customer.delivery==='entrega'?'DELIVERY':order.customer.delivery==='local'?'MESA':'RETIRAR NO BALCÃO'}
@@ -1838,10 +1876,10 @@ function renderTrackingPage(){
   return `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--cream);padding:20px;text-align:center"><div><h2>Pedido não encontrado</h2><p class="meta">Confira se o link está certo, ou fale com a loja pelo WhatsApp.</p><button class="ghost" style="margin-top:14px" onclick="location.hash=''">Ir para o cardápio</button></div></div>`;
  }
  const steps=o.customer.delivery==='entrega'
-  ?[['recebido','Recebido'],['preparando','Em preparo'],['saiu_entrega','Saiu para entrega'],['concluido','Concluído']]
+  ?[['recebido','Recebido'],['preparando','Em preparo'],['aguardando_retirada','Pronto'],['saiu_entrega','Saiu para entrega'],['concluido','Concluído']]
   :o.customer.delivery==='mesa'
   ?[['recebido','Recebido'],['preparando','Em preparo'],['pronto','Pronto para consumo'],['concluido','Concluído']]
-  :[['recebido','Recebido'],['preparando','Em preparo'],['aguardando_retirada','Aguardando retirada'],['concluido','Concluído']];
+  :[['recebido','Recebido'],['preparando','Em preparo'],['aguardando_retirada','Pronto para retirada'],['concluido','Concluído']];
  const curIdx=o.status==='cancelado'?-1:steps.findIndex(s=>s[0]===o.status);
  return `<div style="min-height:100vh;background:var(--bg);color:var(--cream);padding:20px;max-width:480px;margin:0 auto">
  <h2 style="text-align:center">🔥 ${esc(db.settings.storeName)}</h2>
@@ -2474,7 +2512,7 @@ function renderNewProductModal(){
  return `<div class="overlay show"><div class="panel"><div class="head"><h2>Cadastro de produto</h2><button class="x" id="closeOverlay">×</button></div>
  <label class="chip" style="display:inline-block;margin-bottom:12px"><input type="checkbox" id="npActive" checked> Disponível</label>
  <div class="field"><label>Tipo de produto</label><select id="npType"><option value="pa" ${curType!=='pi'?'selected':''}>🍔 Produto Acabado (PA) — aparece para venda ao cliente</option><option value="pi" ${curType==='pi'?'selected':''}>🧾 Produto Intermediário (PI) — usado só em receitas, não aparece para venda</option></select></div>
- <p class="meta" style="margin-top:-6px;margin-bottom:11px">PA é o item final vendido ao cliente (ex.: Cheeseburger). PI é um preparo interno (ex.: Purê de Batatas, molho da casa) usado como ingrediente na receita de um PA — não aparece no cardápio nem no PDV.</p>
+ <p class="meta" style="margin-top:-6px;margin-bottom:11px">PA é o item final vendido ao cliente (ex.: Cheeseburger). PI é um preparo interno (ex.: Purê de Batatas, molho da casa) usado como ingrediente na ficha técnica de um PA — não aparece no cardápio nem no PDV.</p>
  <div class="field"><label>Nome do produto</label><input autocomplete="off" id="npName" placeholder="Ex.: Cheeseburger Duplo"></div>
  <div class="field"><label>Categoria</label>${hasCats?`<div class="row" style="gap:8px"><select id="npCat" style="flex:1">${db.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select><button type="button" class="btn" id="npNewCatToggle" style="white-space:nowrap">+ Novo</button></div><div id="npNewCatWrap" style="display:none;margin-top:8px"><input autocomplete="off" id="npNewCatName" placeholder="Nome da nova categoria"></div>`:`<input autocomplete="off" id="npNewCatName" placeholder="Nome da nova categoria"><p class="meta" style="margin-top:6px">Nenhuma categoria cadastrada ainda — digite acima para criar a primeira.</p>`}</div>
  <div class="field"><label>Classificação (opcional)</label><select id="npPackageType"><option value="">Nenhuma</option>${(db.packageTypes||[]).map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('')}<option value="__new__">+ Cadastrar nova classificação</option></select><p class="meta" style="margin-top:6px">Use para agrupar e ordenar o cardápio do cliente por tipo (ex.: Lata, PET, Garrafa) — dentro da mesma categoria, os produtos aparecem agrupados por classificação e em ordem alfabética.</p></div>
@@ -2495,7 +2533,7 @@ function renderEditProductModal(){
  const curType=window.epTypeSelected||(p.type==='pi'?'pi':'pa');
  return `<div class="overlay show"><div class="panel"><div class="head"><h2>Editar produto</h2><button class="x" id="closeOverlay">×</button></div>
  <div class="field"><label>Tipo de produto</label><select id="epType"><option value="pa" ${curType!=='pi'?'selected':''}>🍔 Produto Acabado (PA) — aparece para venda ao cliente</option><option value="pi" ${curType==='pi'?'selected':''}>🧾 Produto Intermediário (PI) — usado só em receitas, não aparece para venda</option></select></div>
- <p class="meta" style="margin-top:-6px;margin-bottom:11px">PA é o item final vendido ao cliente. PI é um preparo interno (ex.: Purê de Batatas, molho da casa) usado como ingrediente na receita de um PA — não aparece no cardápio nem no PDV.</p>
+ <p class="meta" style="margin-top:-6px;margin-bottom:11px">PA é o item final vendido ao cliente. PI é um preparo interno (ex.: Purê de Batatas, molho da casa) usado como ingrediente na ficha técnica de um PA — não aparece no cardápio nem no PDV.</p>
  <div class="field"><label>Nome</label><input autocomplete="off" id="epName" value="${esc(p.name)}"></div>
  <div class="field"><label>Categoria</label>${db.categories.length?`<div class="row" style="gap:8px"><select id="epCat" style="flex:1">${db.categories.map(c=>`<option value="${c.id}" ${c.id===p.cat?'selected':''}>${esc(c.name)}</option>`).join('')}</select><button type="button" class="btn" id="epNewCatToggle" style="white-space:nowrap">+ Novo</button></div><div id="epNewCatWrap" style="display:none;margin-top:8px"><input autocomplete="off" id="epNewCatName" placeholder="Nome da nova categoria"></div>`:`<input autocomplete="off" id="epNewCatName" placeholder="Nome da nova categoria"><p class="meta" style="margin-top:6px">Nenhuma categoria cadastrada ainda — digite acima para criar a primeira.</p>`}</div>
  <div class="field"><label>Classificação (opcional)</label><select id="epPackageType"><option value="">Nenhuma</option>${(db.packageTypes||[]).map(t=>`<option value="${t.id}" ${t.id===p.packageType?'selected':''}>${esc(t.name)}</option>`).join('')}<option value="__new__">+ Cadastrar nova classificação</option></select><p class="meta" style="margin-top:6px">Use para agrupar e ordenar o cardápio do cliente por tipo (ex.: Lata, PET, Garrafa) — dentro da mesma categoria, os produtos aparecem agrupados por classificação e em ordem alfabética.</p></div>
@@ -2510,8 +2548,8 @@ function renderEditProductModal(){
  <div class="field"><label>Fotos do produto</label>${(p.photos&&p.photos.length)?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px">${p.photos.map((ph,i)=>`<div style="position:relative"><img src="${ph}" style="width:70px;height:70px;object-fit:cover;border-radius:8px;${i===0?'border:2px solid var(--mustard)':'border:2px solid transparent'}"><button type="button" class="icon-btn" data-delphoto="${i}" title="Remover esta foto" style="position:absolute;top:-6px;right:-6px;background:var(--bg);border:1px solid var(--line);border-radius:50%;width:22px;height:22px;padding:0;font-size:12px;line-height:1">✕</button>${i>0?`<button type="button" data-photoup="${i}" title="Mover pra frente" style="position:absolute;bottom:-6px;left:-6px;background:var(--bg);border:1px solid var(--line);border-radius:50%;width:20px;height:20px;padding:0;font-size:11px;line-height:1;cursor:pointer">↑</button>`:''}</div>`).join('')}</div><p class="meta" style="margin:0 0 8px">A primeira foto (com borda) é a capa mostrada no cardápio.</p>`:''}<input type="file" id="epPhoto" accept="image/*" multiple><div id="epPhotoPreview" style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap"></div></div>
  </div>
  ${curType!=='pi'?`<div class="cardbox" style="margin-top:14px"><h3>➕ Adicionais</h3><div class="field"><label>Adicionais disponíveis neste produto</label>${db.addons.length?db.addons.map(a=>{const ex=(p.addons||[]).find(o=>o.id===a.id),cur=ex?Math.min(a.max,ex.max):a.max;return `<div class="addon-choice"><label style="display:flex;align-items:center;gap:8px;flex:1;cursor:pointer;margin:0"><input type="checkbox" data-editaddon="${a.id}" ${ex?'checked':''}><span><b>${esc(a.name)}</b><div class="meta">+ ${money(a.price)} · limite global ${a.max}</div></span></label><div class="addon-counter"><button type="button" data-editaddon-minus="${a.id}">−</button><span id="editAddonMax_${a.id}">${cur}</span><button type="button" data-editaddon-plus="${a.id}">+</button></div></div>`}).join(''):'<span class="meta">Nenhum adicional cadastrado.</span>'}<p class="meta" style="margin-top:4px">Marque os adicionais permitidos e use +/− para definir quantas unidades este produto aceita de cada um.</p></div></div>`:''}
- <div class="cardbox" style="margin-top:14px"><div class="row" style="align-items:center"><h3 style="margin:0">🧾 Receita / Composição</h3>${(p.recipe||[]).length?`<button type="button" class="btn" id="viewCompositionBtn" style="width:auto;padding:6px 12px;font-size:12px">📋 Ver composição completa</button>`:''}</div>
- <div class="field" style="margin-top:8px"><label>Itens (matérias-primas, PI ou outros produtos do cardápio)</label><div id="recipeList">${(p.recipe||[]).length?p.recipe.map((r,idx)=>{const info=recipeItemInfo(r);return `<div class="itemrow itemrow-clickable" data-recipeidx="${idx}" style="cursor:pointer"><div class="row"><b>${info.icon} ${esc(info.name)}</b><span class="meta">${r.qty} ${esc(info.unit)}</span></div><button type="button" class="btn" data-delrecipe="${idx}" style="margin-top:8px">Remover</button><div class="meta" style="opacity:.65;margin-top:4px">Toque para alterar item ou quantidade ›</div></div>`}).join(''):'<p class="meta">Nenhum item na receita.</p>'}</div><button type="button" class="btn" id="addRecipeBtn">+ Adicionar item à receita</button><p class="meta" style="margin-top:6px">💡 Para criar um combo: cadastre este produto como PA, deixe a descrição explicando o que está incluso (ela sairá impressa na comanda) e adicione aqui os produtos que fazem parte dele — o estoque de cada um é descontado automaticamente quando o combo é vendido.</p></div>
+ ${fichaCustoHtml(p)}<div class="cardbox" style="margin-top:14px"><div class="row" style="align-items:center"><h3 style="margin:0">📋 Ficha técnica</h3>${(p.recipe||[]).length?`<button type="button" class="btn" id="viewCompositionBtn" style="width:auto;padding:6px 12px;font-size:12px">📋 Ver composição completa</button>`:''}</div>
+ <div class="field" style="margin-top:8px"><label>Itens (matérias-primas, PI ou outros produtos do cardápio)</label><div id="recipeList">${(p.recipe||[]).length?p.recipe.map((r,idx)=>{const info=recipeItemInfo(r);return `<div class="itemrow itemrow-clickable" data-recipeidx="${idx}" style="cursor:pointer"><div class="row"><b>${info.icon} ${esc(info.name)}</b><span class="meta">${r.qty} ${esc(info.unit)}</span></div><button type="button" class="btn" data-delrecipe="${idx}" style="margin-top:8px">Remover</button><div class="meta" style="opacity:.65;margin-top:4px">Toque para alterar item ou quantidade ›</div></div>`}).join(''):'<p class="meta">Nenhum item na receita.</p>'}</div><button type="button" class="btn" id="addRecipeBtn">+ Adicionar item à ficha técnica</button><p class="meta" style="margin-top:6px">💡 Para criar um combo: cadastre este produto como PA, deixe a descrição explicando o que está incluso (ela sairá impressa na comanda) e adicione aqui os produtos que fazem parte dele — o estoque de cada um é descontado automaticamente quando o combo é vendido.</p></div>
  </div>
  <div class="cardbox" style="margin-top:14px"><h3>👁️ Visibilidade</h3>
  <label class="chip"><input type="checkbox" id="epShowStock" ${p.showStock?'checked':''}> Exibir estoque ao cliente</label>
@@ -2997,7 +3035,7 @@ function renderEstoqueSaidas(){
  const selectedItem=findStockItem(d.itemType,d.itemId);
  return `<div class="cardbox">
  <h3>⬆️ Saída de produto / matéria-prima</h3>
- <p class="meta" style="margin:6px 0 12px">Registre saídas de qualquer produto cadastrado (fora da receita) ou matéria-prima por falta, avaria, desperdício ou outros motivos. O saldo é debitado automaticamente.</p>
+ <p class="meta" style="margin:6px 0 12px">Registre saídas de qualquer produto cadastrado (fora da ficha técnica) ou matéria-prima por falta, avaria, desperdício ou outros motivos. O saldo é debitado automaticamente.</p>
  <div class="field"><label>Motivo</label><select id="stockSaidaMotivo">${STOCK_SAIDA_REASONS.map(r=>`<option value="${r}" ${d.reason===r?'selected':''}>${r}</option>`).join('')}</select></div>
  <div class="field" id="stockPickerWrap_saida" style="position:relative">
   <label>Produto ou matéria-prima</label>
@@ -3065,7 +3103,7 @@ function renderMovimentacao(){
   <div class="field"><label>Filial</label><input autocomplete="off" value="${esc(db.settings.storeName||'')}" disabled></div>
   <div class="field" id="stockPickerWrap_mov" style="position:relative">
    <label>Item</label>
-   <input id="stockSearch_mov" value="${esc(d.itemSearch||'')}" placeholder="🔍 Busque o produto (fora da receita) ou matéria-prima..." autocomplete="off">
+   <input id="stockSearch_mov" value="${esc(d.itemSearch||'')}" placeholder="🔍 Busque o produto (fora da ficha técnica) ou matéria-prima..." autocomplete="off">
    ${itemPickerResultsHtml('mov')}
   </div>
   <div id="stockPickerBelow_mov">${itemPickerBelowHtml('mov')}</div>
@@ -3074,7 +3112,7 @@ function renderMovimentacao(){
    <div class="field"><label>Categoria</label><input autocomplete="off" value="${esc(categoryAuto||'—')}" disabled></div>
   </div>
   <div class="field"><label>Filtrar movimento</label><select id="movFilterType"><option value="">Todos os tipos</option>${MOVE_TYPES.map(t=>`<option value="${t.code}" ${String(filters.moveType)===String(t.code)?'selected':''}>${t.code} - ${t.label}</option>`).join('')}</select></div>
-  <p class="meta" style="margin-top:6px">Produtos com receita não aparecem na busca: acompanhe cada matéria-prima usada na ficha técnica individualmente.</p>
+  <p class="meta" style="margin-top:6px">Produtos com ficha técnica não aparecem na busca: acompanhe cada matéria-prima usada na ficha técnica individualmente.</p>
   ${item?`<button type="button" class="btn" id="openRegisterPerda" style="margin-top:10px">🗑️ Registrar perda deste item</button>`:''}
  </div>
  <div class="metric">
@@ -3116,7 +3154,7 @@ function renderStockGeral(){
  const priceUnlocked=window.stockPriceUnlocked===true;
  const anyUnlocked=unlocked||orderUnlocked||priceUnlocked;
  const menuOpen=window.stockLockMenuOpen===true;
- return `<div class="cardbox"><p class="meta">Para registrar entrada ou saída de qualquer produto (fora da receita) ou matéria-prima no estoque, use as abas ⬇️ Entradas e ⬆️ Saídas acima. Produtos com receita têm o estoque calculado automaticamente a partir das matérias-primas.</p></div>
+ return `<div class="cardbox"><p class="meta">Para registrar entrada ou saída de qualquer produto (fora da ficha técnica) ou matéria-prima no estoque, use as abas ⬇️ Entradas e ⬆️ Saídas acima. Produtos com receita têm o estoque calculado automaticamente a partir das matérias-primas.</p></div>
  <div class="cardbox"><div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
  <h3 style="margin:0;flex:1;min-width:100px">Produtos</h3>
  ${orderUnlocked?'':`<input autocomplete="off" id="stockSearchInput" placeholder="🔍 Pesquisar categoria ou produto..." value="${esc(window.stockSearch||'')}" style="flex:2;min-width:160px;background:var(--bg);border:1px solid var(--line);color:var(--cream);border-radius:7px;padding:9px 10px">`}
@@ -3138,7 +3176,7 @@ function renderStockGeral(){
 function renderStockProdRow(p,unlocked,priceUnlocked){
  const st=getProductStock(p),hasR=productHasRecipe(p),alertLevel=stockAlertLevel(st,p.lowStockThreshold);
  return `<tr>
- <td><button type="button" class="stock-prod-name" data-editprod="${p.id}">${esc(p.name)}</button>${hasR?` <span class="tag">🧾 receita</span> <button type="button" class="icon-btn" data-viewcomposition="${p.id}" onclick="event.stopPropagation()" title="Ver composição completa">📋</button>`:''}${p.type==='pi'?' <span class="tag">PI</span>':''}</td>
+ <td><button type="button" class="stock-prod-name" data-editprod="${p.id}">${esc(p.name)}</button>${hasR?` <span class="tag">📋 ficha técnica</span> <button type="button" class="icon-btn" data-viewcomposition="${p.id}" onclick="event.stopPropagation()" title="Ver composição completa">📋</button>`:''}${p.type==='pi'?' <span class="tag">PI</span>':''}</td>
  <td>${priceUnlocked?`<input autocomplete="off" data-editprice="${p.id}" type="text" inputmode="decimal" value="${moneyMaskFormat(p.price)}" style="width:80px;text-align:right;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:6px;padding:5px 6px">`:`<span class="price">${money(p.price)}</span>`}</td>
  <td>${unlocked&&!hasR?`<input autocomplete="off" data-editstock="product|${p.id}" type="number" min="0" value="${st}" style="width:70px;text-align:right;background:var(--bg);color:var(--cream);border:1px solid var(--line);border-radius:6px;padding:5px 6px">`:`<span class="${st?'':'sold'}" title="${alertLevel==='low'?'Estoque baixo':''}">${alertLevel==='low'?'⚠️ ':''}${st}</span>`}</td>
  <td style="text-align:center"><button type="button" class="toggle-btn ${p.active?'active':''}" data-togglestockprod="${p.id}" onclick="event.stopPropagation()" title="Ativar ou desativar este produto"></button></td>
@@ -3597,11 +3635,11 @@ function renderCadastroReceitas(){
   const productsWithRecipe=db.products.filter(p=>(p.recipe||[]).length>0);
   const productsWithoutRecipe=db.products.filter(p=>(p.recipe||[]).length===0);
   
-  let html=`<h2>Cadastro · Receitas</h2>`;
+  let html=`<h2>Cadastro · Ficha técnica</h2>`;
   
-  html+=`<div class="cardbox"><h3>📋 Produtos com receita (${productsWithRecipe.length})</h3>`;
+  html+=`<div class="cardbox"><h3>📋 Produtos com ficha técnica (${productsWithRecipe.length})</h3>`;
   if(productsWithRecipe.length===0){
-   html+=`<span class="meta">Nenhum produto com receita cadastrada.</span>`;
+   html+=`<span class="meta">Nenhum produto com ficha técnica cadastrada.</span>`;
   }else{
    productsWithRecipe.forEach(p=>{
     const recipeCost=productUnitCost(p);
@@ -3613,20 +3651,20 @@ function renderCadastroReceitas(){
        <b class="addon-name">${esc(p.name)}</b>
        <span class="addon-price">${money(p.price)}</span>
       </div>
-      <span class="addon-status ${st>0?'status-active':'status-inactive'}">${st>0?'✓ Com receita':'⚠️ Sem estoque de insumo'}</span>
+      <span class="addon-status ${st>0?'status-active':'status-inactive'}">${st>0?'✓ Com ficha técnica':'⚠️ Sem estoque de insumo'}</span>
      </div>
      <div class="addon-meta">
-      📝 ${(p.recipe||[]).length} item(ns) na receita · 💰 Custo: ${money(recipeCost)} · Margem: ${money(p.price-recipeCost)} · 📦 Estoque disponível: <b>${st}</b>
+      📝 ${(p.recipe||[]).length} item(ns) na ficha técnica · 💰 Custo total: ${money(fichaCostBreakdown(p).total)} · Margem: ${money(fichaCostBreakdown(p).margin)} · 📦 Estoque disponível: <b>${st}</b>
      </div>
     </div>`;
    });
   }
   html+=`</div>`;
   
-  html+=`<div class="cardbox"><h3>❌ Produtos SEM receita (${productsWithoutRecipe.length})</h3>`;
-  html+=`<p class="meta" style="margin-bottom:12px">Produtos prontos que não precisam de receita (refrigerantes, sucos, sorvetes, etc). PI's sem receita têm o estoque controlado manualmente em Estoque › Entradas/Saídas.</p>`;
+  html+=`<div class="cardbox"><h3>❌ Produtos SEM ficha técnica (${productsWithoutRecipe.length})</h3>`;
+  html+=`<p class="meta" style="margin-bottom:12px">Produtos prontos que não precisam de receita (refrigerantes, sucos, sorvetes, etc). PI's sem ficha técnica têm o estoque controlado manualmente em Estoque › Entradas/Saídas.</p>`;
   if(productsWithoutRecipe.length===0){
-   html+=`<span class="meta">Todos os produtos têm receita! 🎉</span>`;
+   html+=`<span class="meta">Todos os produtos têm ficha técnica! 🎉</span>`;
   }else{
    productsWithoutRecipe.forEach(p=>{
     html+=`<div class="addon-item" data-editrecipe="${p.id}">
@@ -3636,10 +3674,10 @@ function renderCadastroReceitas(){
        <b class="addon-name">${esc(p.name)}</b>
        <span class="addon-price">${money(p.price)}</span>
       </div>
-      <span class="addon-status status-inactive">Sem receita</span>
+      <span class="addon-status status-inactive">Sem ficha técnica</span>
      </div>
      <div class="addon-meta">
-      Comprado pronto · <button type="button" class="btn" data-addrecipe="${p.id}" style="margin-left:8px">Adicionar receita</button>
+      Comprado pronto · <button type="button" class="btn" data-addrecipe="${p.id}" style="margin-left:8px">Adicionar ficha técnica</button>
      </div>
      <div class="meta" style="opacity:.65;margin-top:4px">Toque para editar o produto ›</div>
     </div>`;
@@ -3649,8 +3687,8 @@ function renderCadastroReceitas(){
   
   return html;
  }catch(e){
-  console.error('Erro ao renderizar receitas:',e);
-  return `<h2>Cadastro · Receitas</h2><div class="cardbox"><p class="err">Erro ao carregar receitas. Verifique o console para mais detalhes.</p></div>`;
+  console.error('Erro ao renderizar fichas técnicas:',e);
+  return `<h2>Cadastro · Ficha técnica</h2><div class="cardbox"><p class="err">Erro ao carregar receitas. Verifique o console para mais detalhes.</p></div>`;
  }
 }
 function renderNewRiderDialog(){
@@ -3742,7 +3780,7 @@ function renderRecipeDialog(){
  const piOptions=db.products.filter(x=>x.type==='pi'&&piOptionAllowed(p.id,x.id));
  const paOptions=db.products.filter(x=>x.type==='pa'&&piOptionAllowed(p.id,x.id));
  return `<div class="overlay show"><div class="panel" style="max-width:500px">
- <div class="head"><h2>${isEdit?'Editar item da receita':'Adicionar item à receita'}</h2><button class="x" id="closeOverlay">×</button></div>
+ <div class="head"><h2>${isEdit?'Editar item da ficha técnica':'Adicionar item à ficha técnica'}</h2><button class="x" id="closeOverlay">×</button></div>
  <div class="field"><label>Tipo de item</label><div class="row" style="gap:8px">
   <button type="button" class="btn ${kind==='materia'?'primary':''}" data-recipekind="materia" style="flex:1">🧪 Matéria-prima</button>
   <button type="button" class="btn ${kind==='pi'?'primary':''}" data-recipekind="pi" style="flex:1">🧾 Produto Intermediário (PI)</button>
@@ -3756,8 +3794,8 @@ function renderRecipeDialog(){
   `<div class="field"><label>Matéria-prima</label><select id="recipeIngredientSelect">${[...(db.materiaSections||[]),{id:'',name:'Sem seção'}].map(sec=>({sec,items:db.ingredients.filter(ing=>(ing.section||'')===sec.id)})).filter(g=>g.items.length).map(g=>`<optgroup label="${esc(g.sec.name)}">${g.items.map(ing=>`<option value="${ing.id}" ${cur&&cur.kind!=='pi'&&cur.ingredientId===ing.id?'selected':''}>${esc(ing.name)} (${esc(ing.unit)})</option>`).join('')}</optgroup>`).join('')||'<option disabled>Nenhuma matéria-prima cadastrada</option>'}</select></div>`
  }
  <div class="field"><label>Quantidade</label><input autocomplete="off" id="recipeQty" type="number" step=".01" value="${cur?cur.qty:1}" min="0.01" placeholder="1"></div>
- <button class="primary" id="confirmRecipeAdd">${isEdit?'Salvar alterações':'Adicionar à receita'}</button>
- ${isEdit?`<button class="ghost" id="removeRecipeItem">Remover item da receita</button>`:''}
+ <button class="primary" id="confirmRecipeAdd">${isEdit?'Salvar alterações':'Adicionar à ficha técnica'}</button>
+ ${isEdit?`<button class="ghost" id="removeRecipeItem">Remover item da ficha técnica</button>`:''}
  </div></div>`;
 }
 function renderCadastroPagamento(){
@@ -4789,6 +4827,7 @@ async function submitCustomerOrder(){
  if(d.delivery==='entrega'&&(!d.address.trim()||!d.number.trim()||!d.neighborhood)){formErr='Informe endereço, número e bairro.';render();return}
  for(const x of cart){let p=db.products.find(q=>q.id===x.productId);if(!productAvailable(p)||getProductStock(p)<x.qty){formErr='Um produto ficou esgotado. Revise o carrinho.';render();return}for(const a of x.addons){let ad=db.addons.find(q=>q.id===a.id);if(!ad||!ad.active||ad.stock<a.qty*x.qty){formErr='Um adicional ficou esgotado. Revise o carrinho.';render();return}}}
  const phoneFull=fmtPhone(d.phone);
+ if(d.couponCode){const cv=validateCoupon(d.couponCode);if(!cv.ok){formErr=cv.error;render();return}}
  const session=loggedCustomer();
  const fee=d.delivery==='entrega'?deliveryFee():0;
  const preCredit=cartSubtotal()+fee;
@@ -4799,8 +4838,10 @@ async function submitCustomerOrder(){
  const couponApplied=appliedCoupon?couponDiscountAmount(appliedCoupon,afterCredit):0;
  const base=Math.max(0,afterCredit-couponApplied),total=paymentTotal(base,d.payment),nb=db.neighborhoods.find(n=>n.id===d.neighborhood);
  const orderId=genOrderId('PED-');
- cart.forEach(x=>{consumeProductStock(db.products.find(p=>p.id===x.productId),x.qty,{orderId});x.addons.forEach(a=>db.addons.find(q=>q.id===a.id).stock-=a.qty*x.qty)});
- let o={id:orderId,createdAt:new Date().toISOString(),source:'online',customer:{name:d.name.trim(),phone:phoneFull,delivery:d.delivery,table:d.table,address:d.address,number:d.number,neighborhood:d.neighborhood,neighborhoodName:nb?.name||'',deliveryFee:fee,complement:d.complement,payment:d.payment,changeFor:d.changeFor||'',notes:d.notes},items:cart,total,discount:creditApplied+couponApplied,creditUsed:creditApplied,couponCode:appliedCoupon?appliedCoupon.code:'',couponDiscount:couponApplied,status:'recebido',riderId:null,paid:false};db.orders.push(o);
+ let o={id:orderId,createdAt:new Date().toISOString(),source:'online',customer:{name:d.name.trim(),phone:phoneFull,delivery:d.delivery,table:d.table,address:d.address,number:d.number,neighborhood:d.neighborhood,neighborhoodName:nb?.name||'',deliveryFee:fee,complement:d.complement,payment:d.payment,changeFor:d.changeFor||'',notes:d.notes},items:cart,total,discount:creditApplied+couponApplied,creditUsed:creditApplied,couponCode:appliedCoupon?appliedCoupon.code:'',couponDiscount:couponApplied,status:'recebido',riderId:null,paid:false};
+ try{await saveOrderToSupabase(o)}catch(err){console.error('Pedido não gravado:',err);formErr=(err&&err.message&&!/fetch|network|JSON/i.test(err.message))?err.message:'Não foi possível enviar seu pedido agora. Tente novamente.';render();return}
+cart.forEach(x=>{consumeProductStock(db.products.find(p=>p.id===x.productId),x.qty,{orderId});x.addons.forEach(a=>db.addons.find(q=>q.id===a.id).stock-=a.qty*x.qty)});
+ db.orders.push(o);
  if(creditApplied>0&&session){session.credit=+Math.max(0,Number(session.credit||0)-creditApplied).toFixed(2)}
  if(appliedCoupon){appliedCoupon.usedCount=(Number(appliedCoupon.usedCount)||0)+1}
  let c=findOrCreateCustomerByPhone(d.name.trim(),phoneFull);
@@ -4817,7 +4858,7 @@ async function submitCustomerOrder(){
  setClientSession(c.id);
  save();window.lastOrderId=o.id;
  try{printOrder(o.id)}catch(e){console.error('Falha ao imprimir a comanda (o pedido segue confirmado normalmente):',e)}
- saveOrderToSupabase(o).catch(e=>console.error('Pedido confirmado e impresso normalmente, mas houve falha ao enviar para o Supabase:',e));
+ 
  cart=[];window.checkoutDraft=null;window.cartGeneralNote='';overlay='confirm';
  if(validPhone(db.settings.adminWhatsApp)){try{window.open(notifyAdmin(o),'_blank')}catch(e){console.error('Não foi possível abrir o WhatsApp do administrador automaticamente:',e)}}
  render();
